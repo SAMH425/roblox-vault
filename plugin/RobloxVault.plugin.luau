@@ -218,6 +218,32 @@ local function record(name: string, fn: () -> ())
 end
 
 local function insertAsset(a: any)
+	if a.kind == "texture" then
+		if not a.roblox_asset_id then setStatus("Sube primero la imagen a Roblox y guarda su ID en la bóveda.", C.warn) return end
+		record("Vault: imagen " .. a.name, function()
+			local sel = Selection:Get()
+			local parent: Instance? = nil
+			if #sel == 1 and (sel[1]:IsA("GuiObject") or sel[1]:IsA("LayerCollector")) then parent = sel[1] end
+			if not parent then
+				local sg = game:GetService("StarterGui"):FindFirstChild("VaultUI") or Instance.new("ScreenGui")
+				sg.Name = "VaultUI"
+				sg.ResetOnSpawn = false
+				sg.Parent = game:GetService("StarterGui")
+				parent = sg
+			end
+			local img = Instance.new("ImageLabel")
+			img.Name = a.name
+			img.BackgroundTransparency = 1
+			img.Size = UDim2.fromOffset(100, 100)
+			img.ScaleType = Enum.ScaleType.Fit
+			img.Image = "rbxassetid://" .. a.roblox_asset_id
+			img:SetAttribute("VaultAssetId", a.id)
+			img.Parent = parent
+			Selection:Set({ img })
+			setStatus("Icono " .. a.name .. " insertado en " .. (parent :: Instance):GetFullName(), C.ok)
+		end)
+		return
+	end
 	if a.format == "rbxm" or a.format == "rbxmx" then
 		local r = request("GET", "/asset/" .. a.id .. "/rbxm")
 		if not r.ok then setStatus(r.err or "error", C.bad) return end
@@ -277,7 +303,7 @@ local function showResults(assets: { any })
 			local b = btn("Insertar", card, C.violet)
 			b.AnchorPoint = Vector2.new(1, 0.5); b.Position = UDim2.new(1, -8, 0.5, 0)
 			b.MouseButton1Click:Connect(function()
-				local warnText = if a.status == "VERIFIED" then "" elseif a.status == "FAILED" then "\n⚠ Marcado como FAILED." else "\nLos scripts se insertarán DESACTIVADOS (no está VERIFIED)."
+				local warnText = if a.kind == "texture" then "" elseif a.status == "VERIFIED" then "" elseif a.status == "FAILED" then "\n⚠ Marcado como FAILED." else "\nLos scripts se insertarán DESACTIVADOS (no está VERIFIED)."
 				ask(("¿Insertar %s v%d (%s) en %s?%s"):format(a.name, a.version, a.status, insertTarget():GetFullName(), warnText), function() insertAsset(a) end)
 			end)
 		end

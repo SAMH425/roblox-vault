@@ -101,6 +101,14 @@
 - Settings → Papelera: recuperar uno/todos o vaciar. Vaciar hace copia de seguridad antes y solo borra archivos que
   ningún otro recurso usa. Reimportar un archivo que está en la papelera lo recupera.
 
+## Mejoras de flujo ✅
+- ID de Roblox por recurso (rbxassetid): campo en el inspector, MCP `vault_update_asset.roblox_asset_id`,
+  aparece en búsquedas. El plugin inserta iconos con ID como ImageLabel (en la UI seleccionada o StarterGui/VaultUI).
+- Captura por versión: el visor guarda una imagen de cada versión de un modelo la primera vez que se abre;
+  el inspector las muestra junto a cada versión.
+- Guía de estilo por juego (Project Memory): estilo, paleta (#RRGGBB validada), materiales, fuente, pack y
+  variante de iconos, notas de UI, qué evitar. MCP la devuelve en `vault_get_project_context.style_guide`.
+
 ## Pendiente
 Fase 7: pulido + instalador.
 

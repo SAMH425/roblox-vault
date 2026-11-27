@@ -82,6 +82,7 @@ function Body({ asset, projects, onClose, onChanged, onThumb, onTrash }: { asset
           <label className="text-xs text-zinc-400">Proyecto<select className="input mt-1 w-full" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">Global (compartido)</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         </section>
+        <RobloxIdField asset={asset} onChanged={onChanged} />
         <section>
           <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-medium text-zinc-300">Metadatos</h3>
             <button className="text-xs text-accent hover:underline" onClick={() => setMeta([...meta, ['', '']])}><Plus size={12} className="inline" /> Campo</button></div>
@@ -99,6 +100,7 @@ function Body({ asset, projects, onClose, onChanged, onThumb, onTrash }: { asset
             <button className="btn-ghost py-1 text-xs" onClick={addVersion}><Plus size={12} />Nueva versión</button></div>
           <div className="card divide-y divide-white/[0.04]">{versions.map((v, i) => (
             <div key={v.version} className={`flex items-center gap-3 px-3 py-2 text-xs ${shown === v.version ? 'bg-violet/10' : ''}`}>
+              {VIEWABLE.includes(asset.format) && <VersionThumb id={asset.id} version={v.version} />}
               <button className="font-medium text-white hover:text-accent" onClick={() => setShown(v.version)}>v{v.version}</button>
               <span className="text-zinc-500">{new Date(v.created_at).toLocaleString()}</span>
               <span className="font-mono text-zinc-600">{v.sha256.slice(0, 10)}</span>
@@ -119,5 +121,34 @@ function Body({ asset, projects, onClose, onChanged, onThumb, onTrash }: { asset
             {hist.length === 0 && <p className="text-xs text-zinc-500">Sin historial.</p>}</div></section>
       </div>
     </>
+  )
+}
+
+function VersionThumb({ id, version }: { id: string; version: number }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let u: string | null = null
+    api.versionThumb(id, version).then((b) => { if (b) { u = URL.createObjectURL(new Blob([b], { type: 'image/png' })); setUrl(u) } }).catch(() => {})
+    return () => { if (u) URL.revokeObjectURL(u) }
+  }, [id, version])
+  return <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md bg-panel">{url && <img src={url} className="h-full w-full object-cover" />}</div>
+}
+
+function RobloxIdField({ asset, onChanged }: { asset: Asset; onChanged: () => void }) {
+  const current = typeof asset.metadata.roblox_asset_id === 'string' ? asset.metadata.roblox_asset_id : ''
+  const [val, setVal] = useState(current)
+  const push = useToast((s) => s.push)
+  useEffect(() => setVal(current), [asset.id, current])
+  async function save() { try { await api.setRobloxId(asset.id, val); push('ok', 'ID de Roblox guardado'); onChanged() } catch (e) { toastError(e) } }
+  return (
+    <section>
+      <h3 className="mb-2 text-sm font-medium text-zinc-300">ID en Roblox</h3>
+      <div className="flex gap-2">
+        <input className="input flex-1 font-mono text-xs" placeholder="rbxassetid://… (después de subirlo a Roblox)" value={val} onChange={(e) => setVal(e.target.value)} />
+        <button className="btn-ghost" disabled={!val.trim() || val === current} onClick={save}><Save size={14} /></button>
+        {current && <button className="btn-ghost" title="Copiar rbxassetid" onClick={() => navigator.clipboard.writeText(`rbxassetid://${current}`).then(() => push('ok', 'Copiado'))}><Copy size={14} /></button>}
+      </div>
+      {!current && asset.kind === 'texture' && <p className="mt-1 text-[11px] text-zinc-500">Súbela en Studio (Asset Manager → Import) o pídeselo a Claude, y pega aquí el ID para reutilizarla sin volver a subirla.</p>}
+    </section>
   )
 }

@@ -947,6 +947,68 @@ impl Vault {
     }
 }
 
+
+/// Guía de estilo de un juego: la consulta Claude antes de crear modelos, UI o iconos.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct StyleGuide {
+    #[serde(default)] pub art_style: String,
+    #[serde(default)] pub palette: Vec<String>,
+    #[serde(default)] pub materials: Vec<String>,
+    #[serde(default)] pub font: String,
+    #[serde(default)] pub icon_pack: String,
+    #[serde(default)] pub icon_variant: String,
+    #[serde(default)] pub ui_notes: String,
+    #[serde(default)] pub do_not: String,
+}
+
+impl Vault {
+    pub fn style_guide(&self, project_id: &str) -> Result<StyleGuide> {
+        Ok(self.setting(&format!("style:{project_id}"))?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
+    }
+    pub fn set_style_guide(&self, project_id: &str, g: &StyleGuide) -> Result<StyleGuide> {
+        if !self.list_projects()?.iter().any(|p| p.id == project_id) { return Err(VaultError::NotFound(project_id.into())); }
+        for c in &g.palette {
+            let h = c.trim_start_matches('#');
+            if h.len() != 6 || !h.chars().all(|x| x.is_ascii_hexdigit()) { return Err(VaultError::Invalid(format!("color inválido: {c} (usa #RRGGBB)"))); }
+        }
+        let mut g = g.clone();
+        g.palette = g.palette.iter().map(|c| format!("#{}", c.trim_start_matches('#').to_uppercase())).collect();
+        self.conn.execute("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("style:{project_id}"), serde_json::to_string(&g).unwrap()])?;
+        self.log("app", "project.style", project_id, "", false)?;
+        Ok(g)
+    }
+
+    /// Guarda el ID de Roblox (rbxassetid) de un recurso ya subido, para no volver a subirlo.
+    pub fn set_roblox_asset_id(&self, asset_id: &str, rbx: &str) -> Result<Asset> {
+        let n = rbx.trim().trim_start_matches("rbxassetid://").trim_start_matches("http://www.roblox.com/asset/?id=");
+        if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) || n.len() > 20 { return Err(VaultError::Invalid(format!("ID de Roblox inválido: {rbx}"))); }
+        let mut m = self.get_asset(asset_id)?.metadata;
+        if let Some(o) = m.as_object_mut() { o.insert("roblox_asset_id".into(), serde_json::json!(n)); }
+        let a = self.update_asset(asset_id, None, None, Some(&m))?;
+        self.log_asset("app", "asset.roblox_id", Some(asset_id), &a.name, n, false)?;
+        Ok(a)
+    }
+
+    fn thumb_version_path(&self, asset_id: &str, version: i64) -> Result<PathBuf> {
+        uuid::Uuid::parse_str(asset_id).map_err(|_| VaultError::Invalid("id inválido".into()))?;
+        Ok(self.root.join("thumbs").join(format!("{asset_id}_v{version}.png")))
+    }
+    /// Captura por versión (además de la miniatura principal).
+    pub fn save_version_thumbnail(&self, asset_id: &str, version: i64, png: &[u8]) -> Result<()> {
+        self.save_thumbnail(asset_id, png)?; // valida PNG y recurso
+        let a = self.get_asset(asset_id)?;
+        if version < 1 || version > a.version { return Err(VaultError::Invalid("versión inexistente".into())); }
+        fs::write(self.thumb_version_path(asset_id, version)?, png)?;
+        // la principal debe ser la de la última versión
+        if version != a.version { if let Ok(Some(latest)) = self.version_thumbnail(asset_id, a.version) { fs::write(self.root.join("thumbs").join(format!("{asset_id}.png")), latest)?; } }
+        Ok(())
+    }
+    pub fn version_thumbnail(&self, asset_id: &str, version: i64) -> Result<Option<Vec<u8>>> {
+        let p = self.thumb_version_path(asset_id, version)?;
+        Ok(if p.exists() { Some(fs::read(p)?) } else { None })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1227,5 +1289,24 @@ mod tests {
         v.trash_assets(&[d1.id.clone()]).unwrap();
         v.empty_trash(None).unwrap();
         assert_eq!(v.verify_integrity().unwrap().missing.len(), 0);
+    }
+
+    #[test]
+    fn style_roblox_id_version_thumbs() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        let p = v.create_project("Nariz", "").unwrap();
+        let g = v.set_style_guide(&p.id, &StyleGuide { art_style: "low-poly cartoon".into(), palette: vec!["9065ff".into(), "#36C991".into()], ..Default::default() }).unwrap();
+        assert_eq!(g.palette, vec!["#9065FF", "#36C991"]);
+        assert!(v.set_style_guide(&p.id, &StyleGuide { palette: vec!["rojo".into()], ..Default::default() }).is_err());
+        assert_eq!(v.style_guide(&p.id).unwrap().art_style, "low-poly cartoon");
+        let a = v.import_file(&file(src.path(), "Coin.png", b"\x89PNGc"), None, None).unwrap().asset;
+        assert_eq!(v.set_roblox_asset_id(&a.id, "rbxassetid://1234567").unwrap().metadata["roblox_asset_id"], "1234567");
+        assert!(v.set_roblox_asset_id(&a.id, "abc").is_err());
+        let png = b"\x89PNG\r\n\x1a\nv1";
+        v.save_version_thumbnail(&a.id, 1, png).unwrap();
+        assert_eq!(v.version_thumbnail(&a.id, 1).unwrap().unwrap(), png);
+        assert!(v.save_version_thumbnail(&a.id, 2, png).is_err());
     }
 }

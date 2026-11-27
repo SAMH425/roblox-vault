@@ -37,7 +37,7 @@ fn resolve_project(v: &Vault, key: &str) -> Result<String, String> {
     v.list_projects().map_err(e)?.into_iter().find(|p| p.id == key || p.name.eq_ignore_ascii_case(key)).map(|p| p.id).ok_or_else(|| format!("no existe el proyecto '{key}'. Usa vault_list_projects."))
 }
 fn brief(a: &Asset) -> Value {
-    json!({ "id": a.id, "name": a.name, "kind": a.kind, "format": a.format, "project": a.project_name, "version": a.version, "status": a.status, "updated_at": a.updated_at, "script_type": a.metadata.get("script_type") })
+    json!({ "id": a.id, "name": a.name, "kind": a.kind, "format": a.format, "project": a.project_name, "version": a.version, "status": a.status, "updated_at": a.updated_at, "script_type": a.metadata.get("script_type"), "roblox_asset_id": a.metadata.get("roblox_asset_id") })
 }
 
 pub fn definitions() -> Value {
@@ -65,14 +65,15 @@ pub fn definitions() -> Value {
         "inputSchema": { "type": "object", "properties": { "id": id, "version": { "type": "integer" }, "dest_dir": { "type": "string", "description": "carpeta absoluta de destino" }, "with_dependencies": { "type": "boolean", "default": false } }, "required": ["id", "dest_dir"] } },
       { "name": "vault_update_asset", "description": "Crea una versión nueva a partir de un archivo (la anterior se conserva) y/o cambia nombre, proyecto o metadatos. El estado solo puede pasar a DEPRECATED o PENDING aquí; para verificar usa vault_validate_asset.",
         "inputSchema": { "type": "object", "properties": { "id": id, "new_file_path": { "type": "string" }, "name": { "type": "string" }, "project": { "type": "string" },
-          "metadata": { "type": "object", "description": "se fusiona con los metadatos actuales" }, "status": { "type": "string", "enum": ["DEPRECATED", "PENDING"] } }, "required": ["id"] } },
+          "metadata": { "type": "object", "description": "se fusiona con los metadatos actuales" },
+          "roblox_asset_id": { "type": "string", "description": "ID de Roblox tras subir la imagen/modelo (rbxassetid), para no volver a subirlo" }, "status": { "type": "string", "enum": ["DEPRECATED", "PENDING"] } }, "required": ["id"] } },
       { "name": "vault_get_dependencies", "description": "Dependencias directas y en cadena, quién usa el recurso, problemas (faltantes, FAILED, ciclos) y require() sin resolver.",
         "inputSchema": { "type": "object", "properties": { "id": id, "add": { "type": "array", "items": { "type": "string" }, "description": "ids o nombres a registrar como dependencias" } }, "required": ["id"] } },
       { "name": "vault_validate_asset", "description": "Valida integridad, estructura (sintaxis Luau, RBXM, GLB, JSON) y dependencias, y registra el resultado real de pruebas. Sin pruebas el máximo es PARTIALLY VERIFIED.",
         "inputSchema": { "type": "object", "properties": { "id": id, "test_passed": { "type": "boolean" }, "test_output": { "type": "string" } }, "required": ["id"] } },
       { "name": "vault_list_projects", "description": "Lista los juegos/proyectos con cuántos recursos y sistemas tiene cada uno.",
         "inputSchema": { "type": "object", "properties": {} } },
-      { "name": "vault_get_project_context", "description": "Memoria de un juego: descripción, arquitectura, decisiones técnicas, errores conocidos, cambios recientes, recursos y sistemas.",
+      { "name": "vault_get_project_context", "description": "Memoria de un juego: guía de estilo (estilo, paleta, materiales, fuente, pack de iconos), descripción, arquitectura, decisiones técnicas, errores conocidos, cambios recientes, recursos y sistemas.",
         "inputSchema": { "type": "object", "properties": { "project": { "type": "string" } }, "required": ["project"] } },
       { "name": "vault_log_activity", "description": "Registra en la memoria una decisión técnica, un error conocido, un cambio o una nota de arquitectura (con proyecto), o una entrada de actividad.",
         "inputSchema": { "type": "object", "properties": { "action": { "type": "string" }, "detail": { "type": "string" }, "project": { "type": "string" },
@@ -162,6 +163,7 @@ pub fn call(v: &Vault, name: &str, a: &Value) -> R {
                 Some(_) => return Err("metadata debe ser un objeto".into()), None => None,
             };
             let updated = v.update_asset(&x.id, s(a, "name"), pid.as_ref().map(|p| p.as_deref()), meta.as_ref()).map_err(e)?;
+            if let Some(rid) = s(a, "roblox_asset_id") { v.set_roblox_asset_id(&x.id, rid).map_err(e)?; }
             if let Some(st) = s(a, "status") {
                 if st != "DEPRECATED" && st != "PENDING" { return Err(format!("estado '{st}' no permitido aquí; usa vault_validate_asset (válidos: {})", STATUSES.join(", "))); }
                 v.set_status(&x.id, st).map_err(e)?;
@@ -198,7 +200,7 @@ pub fn call(v: &Vault, name: &str, a: &Value) -> R {
             let c = v.project_context(&pid).map_err(e)?;
             v.log("claude", "mcp.project_context", &c.project.name, "", false).map_err(e)?;
             let by = |k: &str| c.notes.iter().filter(|n| n.kind == k).map(|n| json!({ "text": n.text, "at": n.created_at })).collect::<Vec<_>>();
-            json!({ "project": c.project, "technical_decisions": by("decision"), "known_bugs": by("bug"), "recent_changes": by("change"), "architecture_notes": by("architecture"),
+            json!({ "project": c.project, "style_guide": v.style_guide(&pid).map_err(e)?, "technical_decisions": by("decision"), "known_bugs": by("bug"), "recent_changes": by("change"), "architecture_notes": by("architecture"),
                     "assets": c.assets.iter().map(brief).collect::<Vec<_>>(),
                     "systems": c.systems.iter().map(|s| json!({ "id": s.id, "name": s.name, "status": s.status, "members": s.members.len() })).collect::<Vec<_>>(),
                     "recent_activity": c.recent.iter().take(15).map(|r| json!({ "at": r.at, "action": r.action, "target": r.target })).collect::<Vec<_>>() })

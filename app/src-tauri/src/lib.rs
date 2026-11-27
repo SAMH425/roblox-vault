@@ -115,6 +115,13 @@ fn plugin_file() -> Option<PathBuf> { vault_bridge::studio_plugins_dir().map(|d|
 #[tauri::command] fn empty_trash(s: tauri::State<AppState>, ids: Option<Vec<String>>) -> R<PurgeResult> {
     let (removed, files, b) = s.0.lock().map_err(e)?.empty_trash(ids.as_deref()).map_err(e)?; Ok(PurgeResult { removed, files, backup: b.display().to_string() }) }
 
+#[tauri::command] fn get_style(s: tauri::State<AppState>, project_id: String) -> R<StyleGuide> { s.0.lock().map_err(e)?.style_guide(&project_id).map_err(e) }
+#[tauri::command] fn set_style(s: tauri::State<AppState>, project_id: String, guide: StyleGuide) -> R<StyleGuide> { s.0.lock().map_err(e)?.set_style_guide(&project_id, &guide).map_err(e) }
+#[tauri::command] fn set_roblox_id(s: tauri::State<AppState>, id: String, roblox_id: String) -> R<Asset> { s.0.lock().map_err(e)?.set_roblox_asset_id(&id, &roblox_id).map_err(e) }
+#[tauri::command] fn save_version_thumbnail(s: tauri::State<AppState>, id: String, version: i64, png: Vec<u8>) -> R<()> { s.0.lock().map_err(e)?.save_version_thumbnail(&id, version, &png).map_err(e) }
+#[tauri::command] fn version_thumbnail(s: tauri::State<AppState>, id: String, version: i64) -> R<tauri::ipc::Response> {
+    s.0.lock().map_err(e)?.version_thumbnail(&id, version).map(|o| tauri::ipc::Response::new(o.unwrap_or_default())).map_err(e) }
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -137,7 +144,7 @@ pub fn run() {
             app.manage(AppState(Mutex::new(vault)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info, bridge_info, install_plugin, search_ranked, import_folder, install_templates, trash_assets, restore_trash, list_trash, empty_trash])
+        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info, bridge_info, install_plugin, search_ranked, import_folder, install_templates, trash_assets, restore_trash, list_trash, empty_trash, get_style, set_style, set_roblox_id, save_version_thumbnail, version_thumbnail])
         .run(tauri::generate_context!())
         .expect("error al iniciar ROBLOX VAULT");
 }

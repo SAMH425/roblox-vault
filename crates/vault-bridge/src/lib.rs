@@ -22,7 +22,8 @@ fn err(status: u16, m: impl Into<String>) -> Reply { Reply { status, body: json!
 
 fn brief(a: &Asset) -> Value {
     json!({ "id": a.id, "name": a.name, "kind": a.kind, "format": a.format, "project": a.project_name, "version": a.version, "status": a.status,
-            "script_type": a.metadata.get("script_type"), "insertable": matches!(a.format.as_str(), "rbxm" | "rbxmx" | "lua" | "luau") })
+            "script_type": a.metadata.get("script_type"), "roblox_asset_id": a.metadata.get("roblox_asset_id"),
+            "insertable": matches!(a.format.as_str(), "rbxm" | "rbxmx" | "lua" | "luau") || (a.kind == "texture" && a.metadata.get("roblox_asset_id").is_some()) })
 }
 
 fn query(url: &str) -> Vec<(String, String)> {

@@ -75,15 +75,17 @@ export function Viewer3D({ asset, version, onMeta, onThumb }: { asset: Asset; ve
     if (!model || !info) return
     if (onMeta && !ROBLOX.includes(asset.format) && asset.metadata.meshes === undefined)
       onMeta({ ...asset.metadata, meshes: info.meshes, triangles: info.triangles, dimensions: info.size, materials: info.materials })
+    const v = version ?? asset.version
     const t = setTimeout(async () => {
-      const existing = await api.thumb(asset.id).catch(() => null)
-      if (!existing && snap.current) { await api.saveThumb(asset.id, await snap.current()).catch(() => {}); onThumb?.() }
+      // captura por versión: se hace una vez por versión, la primera vez que se abre
+      const existing = await api.versionThumb(asset.id, v).catch(() => null)
+      if (!existing && snap.current) { await api.saveVersionThumb(asset.id, v, await snap.current()).catch(() => {}); onThumb?.() }
     }, 900)
     return () => clearTimeout(t)
   }, [model, info])
 
   async function updateThumb() {
-    try { if (snap.current) { await api.saveThumb(asset.id, await snap.current()); push('ok', 'Miniatura actualizada'); onThumb?.() } } catch (e) { toastError(e) }
+    try { if (snap.current) { await api.saveVersionThumb(asset.id, version ?? asset.version, await snap.current()); push('ok', 'Miniatura actualizada'); onThumb?.() } } catch (e) { toastError(e) }
   }
   function resetCamera() { controls.current?.reset(); setFit((f) => f + 1) }
 

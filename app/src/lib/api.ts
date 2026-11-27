@@ -25,6 +25,8 @@ export type NoteKind = 'decision' | 'bug' | 'change' | 'architecture'
 export interface ProjectNote { id: number; kind: NoteKind; text: string; created_at: string }
 export interface ProjectContext { project: Project; assets: Asset[]; systems: VaultSystem[]; notes: ProjectNote[]; recent: Activity[] }
 
+export interface StyleGuide { art_style: string; palette: string[]; materials: string[]; font: string; icon_pack: string; icon_variant: string; ui_notes: string; do_not: string }
+
 export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -71,6 +73,11 @@ export const api = {
   restoreTrash: (ids: string[]) => call<number>('restore_trash', { ids }),
   listTrash: () => call<{ asset: Asset; deleted_at: string }[]>('list_trash'),
   emptyTrash: (ids?: string[]) => call<{ removed: number; files: number; backup: string }>('empty_trash', { ids: ids ?? null }),
+  getStyle: (projectId: string) => call<StyleGuide>('get_style', { projectId }),
+  setStyle: (projectId: string, guide: StyleGuide) => call<StyleGuide>('set_style', { projectId, guide }),
+  setRobloxId: (id: string, robloxId: string) => call<Asset>('set_roblox_id', { id, robloxId }),
+  saveVersionThumb: (id: string, version: number, png: Uint8Array) => call<void>('save_version_thumbnail', { id, version, png: Array.from(png) }),
+  versionThumb: async (id: string, version: number) => { const b = await call<ArrayBuffer>('version_thumbnail', { id, version }); return b.byteLength ? b : null },
   versions: (id: string) => call<Version[]>('list_versions', { id }),
   text: (id: string, version?: number) => call<string | null>('get_text', { id, version: version ?? null }),
   addVersion: (id: string, path: string) => call<ImportResult>('add_version', { id, path }),

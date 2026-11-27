@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Bug, GitCommit, Landmark, Lightbulb, Save, Trash2 } from 'lucide-react'
-import { api, type NoteKind, type ProjectContext } from '../lib/api'
+import { ArrowLeft, Bug, GitCommit, Landmark, Lightbulb, Palette, Save, Trash2 } from 'lucide-react'
+import { api, type NoteKind, type ProjectContext, type StyleGuide } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
 import { StatusBadge } from '../components/ui'
 
@@ -30,6 +30,7 @@ export default function ProjectDetail({ id, onBack }: { id: string; onBack: () =
         <textarea className="input h-32 w-full resize-y font-mono text-xs" placeholder="Arquitectura (servicios, carpetas, flujo cliente/servidor…)" value={f.architecture} onChange={(e) => setF({ ...f, architecture: e.target.value })} />
         <button className="btn-primary" onClick={save}><Save size={14} />Guardar</button>
       </div>
+      <StyleEditor projectId={id} />
       <div className="grid grid-cols-2 gap-4">
         {KINDS.map(({ k, label, icon: Icon }) => (
           <div key={k} className="card p-4">
@@ -50,6 +51,45 @@ export default function ProjectDetail({ id, onBack }: { id: string; onBack: () =
           <h3 className="mt-4 mb-2 text-sm font-medium text-zinc-300">Actividad reciente</h3>
           {ctx.recent.slice(0, 8).map((a) => <div key={a.id} className="flex justify-between text-xs"><span className="text-accent">{a.action}</span><span className="text-zinc-500">{a.target}</span></div>)}</div>
       </div>
+    </div>
+  )
+}
+
+const EMPTY_STYLE: StyleGuide = { art_style: '', palette: [], materials: [], font: '', icon_pack: '', icon_variant: '', ui_notes: '', do_not: '' }
+
+function StyleEditor({ projectId }: { projectId: string }) {
+  const [g, setG] = useState<StyleGuide>(EMPTY_STYLE)
+  const [color, setColor] = useState('#9065FF')
+  const push = useToast((s) => s.push)
+  useEffect(() => { api.getStyle(projectId).then((x) => setG({ ...EMPTY_STYLE, ...x })).catch(() => {}) }, [projectId])
+  async function save() { try { setG(await api.setStyle(projectId, g)); push('ok', 'Guía de estilo guardada') } catch (e) { toastError(e) } }
+  const field = (k: keyof StyleGuide, label: string, ph: string) => (
+    <label className="text-xs text-zinc-400">{label}<input className="input mt-1 w-full" placeholder={ph} value={g[k] as string} onChange={(e) => setG({ ...g, [k]: e.target.value })} /></label>)
+  return (
+    <div className="card space-y-3 p-5">
+      <h3 className="flex items-center gap-2 text-sm font-medium text-zinc-300"><Palette size={14} className="text-accent" />Guía de estilo (Claude la consulta antes de crear modelos, UI o iconos)</h3>
+      <div className="grid grid-cols-3 gap-3">
+        {field('art_style', 'Estilo', 'low-poly cartoon, PS2 2004, pixel art…')}
+        {field('font', 'Fuente de UI', 'FredokaOne, GothamBold…')}
+        {field('icon_pack', 'Pack de iconos', 'FreeNaroIconPack')}
+        {field('icon_variant', 'Variante de iconos', 'BlackStroke / WhiteStroke / NoStroke')}
+        <label className="col-span-2 text-xs text-zinc-400">Materiales (separados por coma)<input className="input mt-1 w-full" placeholder="SmoothPlastic, Neon" value={g.materials.join(', ')} onChange={(e) => setG({ ...g, materials: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></label>
+      </div>
+      <div>
+        <div className="mb-1 text-xs text-zinc-400">Paleta</div>
+        <div className="flex flex-wrap items-center gap-2">
+          {g.palette.map((c, i) => (
+            <button key={i} title="Quitar" onClick={() => setG({ ...g, palette: g.palette.filter((_, j) => j !== i) })} className="flex items-center gap-1.5 rounded-lg bg-panel px-2 py-1 text-xs text-zinc-300 hover:text-red-300">
+              <span className="h-4 w-4 rounded" style={{ background: c }} />{c}</button>))}
+          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-7 w-9 cursor-pointer rounded bg-transparent" />
+          <button className="btn-ghost py-1 text-xs" onClick={() => setG({ ...g, palette: [...g.palette, color] })}>Añadir color</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-xs text-zinc-400">Notas de UI<textarea className="input mt-1 h-20 w-full resize-y" placeholder="Botones redondeados, sombra inferior, contorno negro 3px…" value={g.ui_notes} onChange={(e) => setG({ ...g, ui_notes: e.target.value })} /></label>
+        <label className="text-xs text-zinc-400">Evitar<textarea className="input mt-1 h-20 w-full resize-y" placeholder="Nada realista, sin texturas de alta resolución…" value={g.do_not} onChange={(e) => setG({ ...g, do_not: e.target.value })} /></label>
+      </div>
+      <button className="btn-primary" onClick={save}><Save size={14} />Guardar guía</button>
     </div>
   )
 }
