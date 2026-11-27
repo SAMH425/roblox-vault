@@ -814,6 +814,68 @@ impl Vault {
     }
 }
 
+
+#[derive(Serialize, Debug, Default)]
+pub struct FolderImport { pub imported: usize, pub duplicates: usize, pub skipped: usize, pub errors: Vec<String> }
+
+/// Variante de icono por sufijo habitual en packs de Roblox ("CoinBlackStroke" → ("Coin", "BlackStroke")).
+pub fn icon_variant(stem: &str) -> (String, Option<String>) {
+    for v in ["BlackStroke", "WhiteStroke", "NoStroke"] {
+        if stem.len() > v.len() && stem.to_lowercase().ends_with(&v.to_lowercase()) { return (stem[..stem.len() - v.len()].to_string(), Some(v.to_string())); }
+    }
+    (stem.to_string(), None)
+}
+
+impl Vault {
+    /// Importa una carpeta entera (recursiva) como un pack: guarda pack, categoría (subcarpeta),
+    /// variante y licencia en los metadatos. Solo tipos conocidos; nunca toca los originales.
+    pub fn import_folder(&self, dir: &Path, pack: &str, project_id: Option<&str>) -> Result<FolderImport> {
+        if !dir.is_dir() { return Err(VaultError::NotFound(dir.display().to_string())); }
+        let mut license = None;
+        let mut files = vec![];
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d)? {
+                let p = e?.path();
+                if p.is_dir() { stack.push(p); continue; }
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                if name.starts_with("license") || name.starts_with("licence") { license = fs::read_to_string(&p).ok(); }
+                files.push(p);
+            }
+        }
+        files.sort();
+        let mut rep = FolderImport::default();
+        for f in files {
+            let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let (kind, _) = classify(&fname);
+            if kind == "other" || fname.to_lowercase().starts_with("license") { rep.skipped += 1; continue; }
+            match self.import_file(&f, project_id, None) {
+                Ok(r) if r.duplicate_of.is_some() => rep.duplicates += 1,
+                Ok(r) => {
+                    let rel = f.strip_prefix(dir).unwrap_or(&f);
+                    let parts: Vec<String> = rel.parent().map(|p| p.components().filter_map(|c| c.as_os_str().to_str().map(String::from)).collect()).unwrap_or_default();
+                    let stem = Path::new(&fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let (base, variant) = icon_variant(stem);
+                    let mut m = r.asset.metadata.clone();
+                    if let Some(o) = m.as_object_mut() {
+                        o.insert("pack".into(), serde_json::json!(pack));
+                        o.insert("category".into(), serde_json::json!(parts.last().cloned().unwrap_or_default()));
+                        o.insert("pack_path".into(), serde_json::json!(rel.to_string_lossy().replace('\\', "/")));
+                        o.insert("icon".into(), serde_json::json!(base));
+                        if let Some(v) = variant { o.insert("variant".into(), serde_json::json!(v)); }
+                        if let Some(l) = &license { o.insert("license".into(), serde_json::json!(l.chars().take(2000).collect::<String>())); }
+                    }
+                    self.update_asset(&r.asset.id, None, None, Some(&m))?;
+                    rep.imported += 1;
+                }
+                Err(e) => rep.errors.push(format!("{fname}: {e}")),
+            }
+        }
+        self.log("app", "folder.import", pack, &format!("{} nuevos, {} duplicados", rep.imported, rep.duplicates), false)?;
+        Ok(rep)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,5 +1099,28 @@ mod tests {
         assert!(!r.is_empty(), "prefijos");
         assert!(v.search_ranked(None, None, "dragon", 10).unwrap().is_empty());
         assert_eq!(v.search_ranked(None, None, "", 10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn folder_import_icons() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        fs::create_dir_all(src.path().join("Currencies")).unwrap();
+        fs::create_dir_all(src.path().join("UI")).unwrap();
+        file(&src.path().join("Currencies"), "Coin.png", b"\x89PNGcoin");
+        file(&src.path().join("Currencies"), "CoinBlackStroke.png", b"\x89PNGcoin2");
+        file(&src.path().join("UI"), "X.png", b"\x89PNGx");
+        file(&src.path().join("UI"), "dup.png", b"\x89PNGx");
+        file(src.path(), "License.txt", b"Use in commercial projects");
+        file(src.path(), "README.pdf", b"%PDF");
+        let r = v.import_folder(src.path(), "Naro", None).unwrap();
+        assert_eq!((r.imported, r.duplicates, r.skipped), (3, 1, 2));
+        let a = v.search_ranked(Some("texture"), None, "coin black stroke", 5).unwrap();
+        assert_eq!(a[0].asset.metadata["variant"], "BlackStroke");
+        assert_eq!(a[0].asset.metadata["category"], "Currencies");
+        assert_eq!(a[0].asset.metadata["icon"], "Coin");
+        assert!(a[0].asset.metadata["license"].as_str().unwrap().contains("commercial"));
+        assert_eq!(v.import_folder(src.path(), "Naro", None).unwrap().imported, 0, "repetir no duplica");
     }
 }

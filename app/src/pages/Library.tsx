@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Download, FileUp, Search, Boxes, LayoutGrid, List } from 'lucide-react'
+import { Download, FileUp, FolderInput, Search, Boxes, LayoutGrid, List } from 'lucide-react'
 import { api, formatBytes, STATUSES, type Asset, type Project, type Status } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
 import { Empty, PageHeader, StatusBadge } from '../components/ui'
@@ -18,7 +18,7 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
   const [projectId, setProjectId] = useState('')
   const [status, setStatusF] = useState('')
   const [sort, setSort] = useState<Sort>('relevance')
-  const [view, setView] = useState<'list' | 'grid'>(kind === 'model' ? 'grid' : 'list')
+  const [view, setView] = useState<'list' | 'grid'>(kind === 'model' || kind === 'texture' ? 'grid' : 'list')
   const [sel, setSel] = useState<Asset | null>(null)
   const [thumbBump, setThumbBump] = useState(0)
   const push = useToast((s) => s.push)
@@ -47,6 +47,18 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
     } catch (e) { toastError(e) }
   }
 
+  async function importFolder() {
+    try {
+      const dir = await open({ directory: true })
+      if (!dir || Array.isArray(dir)) return
+      const pack = dir.split(/[\\/]/).filter(Boolean).pop() ?? 'Pack'
+      push('info', `Importando ${pack}…`)
+      const r = await api.importFolder(dir, pack, projectId || undefined)
+      push(r.errors.length ? 'error' : 'ok', `${pack}: ${r.imported} nuevos, ${r.duplicates} ya existían, ${r.skipped} ignorados${r.errors.length ? `, ${r.errors.length} errores` : ''}`)
+      load()
+    } catch (e) { toastError(e) }
+  }
+
   async function restore(a: Asset) {
     try {
       const dir = await open({ directory: true })
@@ -61,7 +73,7 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
 
   return (
     <div>
-      <PageHeader title={title} subtitle={subtitle} actions={<button className="btn-primary" onClick={importFiles}><FileUp size={16} />Importar</button>} />
+      <PageHeader title={title} subtitle={subtitle} actions={<>{kind === 'texture' && <button className="btn-ghost" onClick={importFolder}><FolderInput size={16} />Importar carpeta</button>}<button className="btn-primary" onClick={importFiles}><FileUp size={16} />Importar</button></>} />
       <div className="mb-4 flex gap-3">
         <div className="relative flex-1"><Search size={16} className="absolute top-2.5 left-3 text-zinc-500" />
           <input className="input w-full pl-9" placeholder="Buscar por nombre o contenido…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
@@ -79,10 +91,10 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
       {items === null ? <div className="space-y-2">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-14" />)}</div>
         : shown.length === 0 ? <Empty icon={<Boxes size={22} />} title="Nada por aquí" text="Importa archivos: se copian a la bóveda con SHA-256 y el original no se toca." action={<button className="btn-ghost" onClick={importFiles}><FileUp size={16} />Importar</button>} />
         : view === 'grid' ? (
-          <div className="grid grid-cols-4 gap-4">{shown.map((a, i) => (
+          <div className={`grid gap-4 ${kind === 'texture' ? 'grid-cols-6' : 'grid-cols-4'}`}>{shown.slice(0, 600).map((a, i) => (
             <motion.button key={a.id} onClick={() => setSel(a)} className="card p-4 text-left transition-colors hover:border-violet/40" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.02 }} whileHover={{ y: -2 }}>
               <div className="mb-3 grid h-32 place-items-center overflow-hidden rounded-xl bg-panel/60"><Thumb asset={a} bump={thumbBump} /></div>
-              <div className="truncate font-medium text-white">{a.name}</div>
+              <div className="truncate font-medium text-white">{a.name}</div>{typeof a.metadata.category === 'string' && <div className="truncate text-[11px] text-accent">{String(a.metadata.pack ?? '')} · {a.metadata.category}{a.metadata.variant ? ` · ${a.metadata.variant}` : ''}</div>}
               <div className="mt-1 flex items-center justify-between text-xs text-zinc-500"><span>v{a.version} · {formatBytes(a.size)}</span><StatusBadge s={a.status} /></div>
             </motion.button>))}</div>
         ) : (

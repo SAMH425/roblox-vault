@@ -30,6 +30,20 @@ jobs:
           cargo test --manifest-path crates/vault-mcp/Cargo.toml
           cargo test --manifest-path crates/vault-bridge/Cargo.toml
 
+      - name: Pruebas Luau reales de las plantillas BASE
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/luau-lang/luau/releases/latest/download/luau-windows.zip -OutFile luau.zip
+          Expand-Archive luau.zip -DestinationPath luau-bin -Force
+          Push-Location templates
+          ../luau-bin/luau.exe run_specs.luau
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          foreach ($f in @("Inventory/Inventory.luau","Economy/CurrencyLogic.luau","DataSave/DataCore.luau","Rounds/RoundMachine.luau","AntiCheat/MovementCheck.luau")) {
+            ../luau-bin/luau-analyze.exe $f
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          Pop-Location
+
       - name: Compilar servidor MCP (se instala junto a la app)
         shell: pwsh
         run: |

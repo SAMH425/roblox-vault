@@ -98,6 +98,14 @@ fn plugin_file() -> Option<PathBuf> { vault_bridge::studio_plugins_dir().map(|d|
 #[tauri::command] fn search_ranked(s: tauri::State<AppState>, kind: Option<String>, project_id: Option<String>, query: String) -> R<Vec<Ranked>> {
     s.0.lock().map_err(e)?.search_ranked(kind.as_deref(), project_id.as_deref(), &query, 200).map_err(e) }
 
+#[tauri::command] fn import_folder(s: tauri::State<AppState>, path: String, pack: String, project_id: Option<String>) -> R<FolderImport> {
+    s.0.lock().map_err(e)?.import_folder(&PathBuf::from(path), &pack, project_id.as_deref()).map_err(e) }
+#[tauri::command] fn install_templates(s: tauri::State<AppState>) -> R<serde_json::Value> {
+    let v = s.0.lock().map_err(e)?;
+    let tmp = v.root.join("incoming");
+    vault_bridge::templates::install(&v, &tmp)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -120,7 +128,7 @@ pub fn run() {
             app.manage(AppState(Mutex::new(vault)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info, bridge_info, install_plugin, search_ranked])
+        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info, bridge_info, install_plugin, search_ranked, import_folder, install_templates])
         .run(tauri::generate_context!())
         .expect("error al iniciar ROBLOX VAULT");
 }

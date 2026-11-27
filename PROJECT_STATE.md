@@ -75,6 +75,26 @@
 - Documentación: README, docs/ARCHITECTURE, docs/MCP, docs/PLUGIN, docs/LIMITATIONS.
 - Instalador Windows (NSIS) + actualizaciones automáticas firmadas ya funcionando.
 
+## Mejora 1 — PRUEBAS REALES EN STUDIO ✅ (pendiente de probar en tu Studio)
+- Plugin → "Ejecutar pruebas": inserta un runner temporal, lanza Play con StudioTestService:ExecutePlayModeAsync,
+  ejecuta todos los ModuleScript `*.spec`, captura errores de consola (LogService) y devuelve el informe con EndTest.
+  La bóveda valida cada recurso con el resultado real (VERIFIED / FAILED). El runner se borra al terminar.
+
+## Mejora 2 — PLANTILLAS BASE ✅
+- `templates/`: DataSave (bloqueo de sesión, reintentos, reconciliación), Economy & Shop (validación en servidor),
+  Inventory, Rounds & Lobby, AntiCheat (velocidad/teletransporte), Mobile Controls.
+- 27 pruebas ejecutadas con Luau real + luau-analyze estricto, también en CI antes de cada versión.
+- App: Systems Library → "Instalar plantillas BASE" (idempotente, versiona cambios). Plugin → "Sistemas" →
+  inserta cada script en su servicio sin tocar lo que ya exista.
+- Estado honesto: módulos puros con spec → VERIFIED; scripts de servidor/cliente → PARTIALLY VERIFIED hasta
+  pasar "Ejecutar pruebas" en Studio.
+
+## Iconos y UI ✅
+- Página "UI & Icons" + "Importar carpeta": importa packs completos con pack, categoría, variante
+  (BlackStroke/WhiteStroke/NoStroke) y licencia en metadatos; búsqueda por relevancia ("coin black stroke").
+- Packs del usuario: FreeNaroStarterIconPack y Free Icon Pack v3.1 (licencia: uso comercial permitido, no revender).
+- Limitación: para usarlos en un juego hay que subirlos a Roblox (rbxassetid).
+
 ## Pendiente
 Fase 7: pulido + instalador.
 

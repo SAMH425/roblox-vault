@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use vault_core::{roblox, Asset, Vault};
 
+pub mod templates;
+
 pub const DEFAULT_PORT: u16 = 47515;
 pub const PLUGIN_SOURCE: &str = include_str!("../../../plugin/RobloxVault.plugin.luau");
 const MAX_BODY: usize = 64 * 1024 * 1024;
@@ -139,6 +141,44 @@ impl Bridge {
                 r["syntax_errors"] = json!(vault_core::luau_syntax_errors(source));
                 Ok(r)
             }
+            ("GET", ["systems"]) => {
+                let list = v.list_systems(None, qp("q").as_deref()).map_err(|e| e.to_string())?;
+                Ok(json!({ "systems": list.iter().map(|s| json!({ "id": s.id, "name": s.name, "status": s.status, "members": s.members.len(), "warnings": s.warnings })).collect::<Vec<_>>() }))
+            }
+            ("GET", ["system", id]) => {
+                let s = v.get_system(id).map_err(|e| e.to_string())?;
+                if s.warnings.iter().any(|w| w.contains("falta")) { return Err(format!("faltan dependencias: {}", s.warnings.join("; "))); }
+                let members: Vec<Value> = s.members.iter().map(|m| {
+                    let a = &m.asset;
+                    let code = v.get_text(&a.id, None).ok().flatten();
+                    json!({ "role": m.role, "asset": brief(a), "location": a.metadata.get("studio_location"),
+                            "class": a.metadata.get("script_type"), "source": code, "syntax_errors": code.as_deref().map(vault_core::luau_syntax_errors) })
+                }).collect();
+                v.log("studio", "studio.insert_system", &s.name, "", false).map_err(|e| e.to_string())?;
+                Ok(json!({ "id": s.id, "name": s.name, "status": s.status, "install": s.install, "members": members }))
+            }
+            ("POST", ["tests"]) => {
+                // Resultados REALES de StudioTestService (Play) → se validan los recursos con su resultado
+                let b = json_body()?;
+                let errors: Vec<String> = b["errors"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                let mut out = vec![];
+                for spec in b["specs"].as_array().ok_or("faltan specs")? {
+                    let results = spec["results"].as_array().cloned().unwrap_or_default();
+                    let passed = !results.is_empty() && results.iter().all(|r| r["passed"].as_bool() == Some(true));
+                    let lines: Vec<String> = results.iter().map(|r| format!("{} {}{}", if r["passed"].as_bool() == Some(true) { "ok" } else { "FALLO" },
+                        r["name"].as_str().unwrap_or("?"), r["error"].as_str().map(|e| format!(" → {e}")).unwrap_or_default())).collect();
+                    let output = format!("Roblox Studio (Play) · {}\n{}", spec["spec"].as_str().unwrap_or(""), lines.join("\n"));
+                    let mut validated = vec![];
+                    for key in ["target_id", "spec_id"] {
+                        if let Some(id) = spec[key].as_str() {
+                            if v.get_asset(id).is_ok() { validated.push(v.validate_asset(id, Some(passed), &output, "studio-tests").map_err(|e| e.to_string())?.status_after); }
+                        }
+                    }
+                    out.push(json!({ "spec": spec["spec"], "passed": passed, "tests": results.len(), "validated": validated }));
+                }
+                v.log("studio", "studio.tests", &format!("{} specs", out.len()), &format!("{} errores en consola", errors.len()), false).map_err(|e| e.to_string())?;
+                Ok(json!({ "specs": out, "runtime_errors": errors }))
+            }
             ("POST", ["log"]) => {
                 let b = json_body()?;
                 let action = b.get("action").and_then(Value::as_str).unwrap_or("studio.change");
@@ -234,6 +274,43 @@ mod tests {
         assert_eq!(b.handle("POST", "/log", t, br#"{"action":"edit","target":"Workspace.Map"}"#).status, 200);
         assert_eq!(b.handle("DELETE", "/asset/x", t, b"").status, 404);
         let n = safe_name("..\\..//evil:name*"); assert!(!n.contains('/') && !n.contains('\\') && !n.contains(':') && !n.starts_with('.'), "{n}");
+    }
+
+    #[test]
+    fn templates_install_and_studio_tests() {
+        let (b, d) = bridge();
+        let t = Some("secret");
+        {
+            let v = b.vault.lock().unwrap();
+            let r = templates::install(&v, &d.path().join("tpl")).unwrap();
+            assert_eq!(r["systems"].as_array().unwrap().len(), 6);
+            // idempotente
+            let r2 = templates::install(&v, &d.path().join("tpl")).unwrap();
+            assert!(r2["systems"].as_array().unwrap().iter().all(|s| s["added"] == 0 && s["updated"] == 0));
+            let inv = v.list_systems(None, Some("Inventory")).unwrap().remove(0);
+            assert_eq!(inv.members.len(), 2);
+            assert!(inv.members.iter().all(|m| m.asset.status == "VERIFIED"), "módulo puro + spec probados");
+            assert_eq!(inv.status, "VERIFIED");
+            let eco = v.list_systems(None, Some("Economy")).unwrap().remove(0);
+            assert_eq!(eco.status, "PARTIALLY VERIFIED", "ShopServer no tiene pruebas reales todavía");
+            for s in v.list_systems(None, None).unwrap() { for m in &s.members { assert!(m.asset.metadata.get("studio_location").is_some()); } }
+        }
+        // el plugin pide el sistema completo
+        let sys = b.handle("GET", "/systems?q=Rounds", t, b"");
+        let id = sys.body["systems"][0]["id"].as_str().unwrap().to_string();
+        let full = b.handle("GET", &format!("/system/{id}"), t, b"");
+        assert_eq!(full.status, 200, "{}", full.body);
+        let members = full.body["members"].as_array().unwrap();
+        assert!(members.iter().any(|m| m["class"] == "Script" && m["location"] == "ServerScriptService/Rounds"));
+        assert!(members.iter().all(|m| m["syntax_errors"].as_array().map_or(true, |e| e.is_empty())));
+        // resultados reales desde Studio: un fallo marca FAILED
+        let target = members.iter().find(|m| m["asset"]["name"] == "RoundMachine").unwrap()["asset"]["id"].as_str().unwrap().to_string();
+        let body = json!({ "specs": [{ "spec": "ServerScriptService.Rounds.RoundMachine.spec", "target_id": target, "results": [{ "name": "x", "passed": false, "error": "boom" }] }], "errors": ["Script error"] });
+        let r = b.handle("POST", "/tests", t, body.to_string().as_bytes());
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.body["specs"][0]["validated"][0], "FAILED");
+        let body = json!({ "specs": [{ "spec": "s", "target_id": target, "results": [{ "name": "x", "passed": true }] }], "errors": [] });
+        assert_eq!(b.handle("POST", "/tests", t, body.to_string().as_bytes()).body["specs"][0]["validated"][0], "VERIFIED");
     }
 
     #[test]

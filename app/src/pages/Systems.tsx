@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, Download, Plus, Puzzle, Save, Search, Trash2 } from 'lucide-react'
+import { AlertTriangle, Download, PackagePlus, Plus, Puzzle, Save, Search, Trash2 } from 'lucide-react'
 import { api, STATUSES, type Asset, type Project, type Status, type SystemInput, type VaultSystem } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
 import { Empty, Modal, PageHeader, StatusBadge } from '../components/ui'
@@ -30,7 +30,9 @@ export default function Systems() {
 
   return (
     <div>
-      <PageHeader title="Systems Library" subtitle="Grupos de recursos que funcionan juntos" actions={<button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} />Nuevo sistema</button>} />
+      <PageHeader title="Systems Library" subtitle="Grupos de recursos que funcionan juntos" actions={<><button className="btn-ghost" onClick={async () => {
+        try { const r = await api.installTemplates(); push('ok', `Plantillas BASE: ${r.systems.length} sistemas (${r.systems.reduce((n, s) => n + s.added, 0)} archivos nuevos, ${r.systems.reduce((n, s) => n + s.updated, 0)} actualizados)`); load() } catch (e) { toastError(e) }
+      }}><PackagePlus size={16} />Instalar plantillas BASE</button><button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} />Nuevo sistema</button></>} />
       <div className="grid grid-cols-[300px_1fr] gap-5">
         <div>
           <div className="relative mb-3"><Search size={16} className="absolute top-2.5 left-3 text-zinc-500" /><input className="input w-full pl-9" placeholder="Buscar sistemas…" value={q} onChange={(e) => setQ(e.target.value)} /></div>

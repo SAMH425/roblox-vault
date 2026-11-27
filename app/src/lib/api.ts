@@ -65,6 +65,8 @@ export const api = {
   bridgeInfo: () => call<{ running: boolean; port: number; error: string | null; plugin_path: string | null; plugin_installed: boolean }>('bridge_info'),
   installPlugin: () => call<string>('install_plugin'),
   ranked: (query: string, f: { kind?: string; projectId?: string } = {}) => call<{ asset: Asset; score: number; matched: string[] }[]>('search_ranked', { query, kind: f.kind ?? null, projectId: f.projectId ?? null }),
+  importFolder: (path: string, pack: string, projectId?: string) => call<{ imported: number; duplicates: number; skipped: number; errors: string[] }>('import_folder', { path, pack, projectId: projectId ?? null }),
+  installTemplates: () => call<{ systems: { system: string; added: number; updated: number; members: number }[] }>('install_templates'),
   versions: (id: string) => call<Version[]>('list_versions', { id }),
   text: (id: string, version?: number) => call<string | null>('get_text', { id, version: version ?? null }),
   addVersion: (id: string, path: string) => call<ImportResult>('add_version', { id, path }),

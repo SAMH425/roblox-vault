@@ -10,6 +10,8 @@ local SerializationService = game:GetService("SerializationService")
 local EncodingService = game:GetService("EncodingService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local StudioService = game:GetService("StudioService")
+local StudioTestService = game:GetService("StudioTestService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local PORT = __VAULT_PORT__
 local TOKEN = "__VAULT_TOKEN__"
@@ -108,6 +110,7 @@ local searchBox = make("TextBox", { LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 3
 corner(searchBox); make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, searchBox)
 local r2 = row(6)
 local scopeBtn = btn("Ámbito: todo", r2, C.panel)
+local systemsBtn = btn("Sistemas", r2, C.panel)
 
 local confirm = make("Frame", { LayoutOrder = 7, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.panel, Visible = false }, root)
 corner(confirm); pad(confirm, 8)
@@ -119,7 +122,7 @@ make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = 
 local yesBtn = btn("Insertar", confirmRow, C.violet)
 local noBtn = btn("Cancelar", confirmRow, C.panel)
 
-local list = make("ScrollingFrame", { LayoutOrder = 8, Size = UDim2.new(1, 0, 1, -250), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 6,
+local list = make("ScrollingFrame", { LayoutOrder = 8, Size = UDim2.new(1, 0, 1, -260), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 6,
 	CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y }, root)
 make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
 
@@ -128,6 +131,7 @@ local noteBox = make("TextBox", { LayoutOrder = 9, Size = UDim2.new(1, 0, 0, 30)
 corner(noteBox); make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, noteBox)
 local r3 = row(10)
 local logBtn = btn("Registrar cambio", r3, C.panel)
+local testBtn = btn("Ejecutar pruebas", r3, C.violet)
 
 local function setStatus(text: string, color: Color3?)
 	status.Text = text
@@ -350,6 +354,170 @@ logBtn.MouseButton1Click:Connect(function()
 	for _, s in Selection:Get() do table.insert(targets, s:GetFullName()) end
 	local r = request("POST", "/log", { action = "change", target = table.concat(targets, ", "), detail = note .. " · " .. game.Name })
 	if r.ok then noteBox.Text = ""; setStatus("Cambio registrado.", C.ok) else setStatus(r.err or "error", C.bad) end
+end)
+
+
+---------------------------------------------------------------- sistemas completos
+-- Crea (o reutiliza) la ruta "Servicio/Carpeta/Sub" y devuelve el contenedor final.
+local function ensurePath(path: string): Instance
+	local parts = string.split(path, "/")
+	local current: Instance = game:GetService(parts[1])
+	for i = 2, #parts do
+		local child = current:FindFirstChild(parts[i])
+		if not child then
+			child = Instance.new("Folder")
+			child.Name = parts[i]
+			child.Parent = current
+		end
+		current = child
+	end
+	return current
+end
+
+local function insertSystem(sys: any)
+	local r = request("GET", "/system/" .. sys.id)
+	if not r.ok then setStatus(r.err or "error", C.bad) return end
+	local skipped, created, off = {}, 0, 0
+	for _, m in r.data.members do
+		if m.syntax_errors and #m.syntax_errors > 0 then setStatus("No se inserta: " .. m.asset.name .. " tiene errores de sintaxis", C.bad) return end
+	end
+	record("Vault: sistema " .. r.data.name, function()
+		for _, m in r.data.members do
+			if m.source then
+				local parent = ensurePath(m.location or "ServerScriptService")
+				if parent:FindFirstChild(m.asset.name) then
+					table.insert(skipped, m.asset.name) -- nunca sobrescribe
+				else
+					local cls = m.class
+					if cls ~= "Script" and cls ~= "LocalScript" then cls = "ModuleScript" end
+					local s = Instance.new(cls)
+					s.Name = m.asset.name;
+					(s :: any).Source = m.source
+					s:SetAttribute("VaultAssetId", m.asset.id)
+					off += disableScripts(s, m.asset.status)
+					s.Parent = parent
+					created += 1
+				end
+			end
+		end
+	end)
+	local msg = ("Sistema %s: %d insertados"):format(r.data.name, created)
+	if #skipped > 0 then msg ..= " · ya existían (no se tocaron): " .. table.concat(skipped, ", ") end
+	if off > 0 then msg ..= (" · %d script(s) desactivados hasta probarlos"):format(off) end
+	setStatus(msg, C.ok)
+end
+
+local function showSystems(systems: { any })
+	clearList()
+	for i, sys in systems do
+		local card = make("Frame", { LayoutOrder = i, Size = UDim2.new(1, -8, 0, 50), BackgroundColor3 = C.surface }, list)
+		corner(card)
+		make("TextLabel", { Position = UDim2.fromOffset(10, 6), Size = UDim2.new(1, -110, 0, 18), BackgroundTransparency = 1, Text = sys.name, TextColor3 = C.text,
+			Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd }, card)
+		make("TextLabel", { Position = UDim2.fromOffset(10, 26), Size = UDim2.new(1, -110, 0, 16), BackgroundTransparency = 1,
+			Text = ("SISTEMA · %d recursos · %s"):format(sys.members, sys.status), TextColor3 = statusColor[sys.status] or C.muted,
+			Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left }, card)
+		local b = btn("Insertar", card, C.violet)
+		b.AnchorPoint = Vector2.new(1, 0.5); b.Position = UDim2.new(1, -8, 0.5, 0)
+		b.MouseButton1Click:Connect(function()
+			ask(("¿Insertar el sistema %s (%d recursos, %s)? Cada script irá a su servicio. Lo que ya exista no se toca."):format(sys.name, sys.members, sys.status), function() insertSystem(sys) end)
+		end)
+	end
+	if #systems == 0 then make("TextLabel", { Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, Text = "Sin sistemas. En la app: Systems Library → Instalar plantillas BASE.", TextColor3 = C.muted, TextWrapped = true, Font = Enum.Font.Gotham, TextSize = 12 }, list) end
+end
+
+systemsBtn.MouseButton1Click:Connect(function()
+	local r = request("GET", "/systems?q=" .. urlencode(searchBox.Text))
+	if not r.ok then setStatus(r.err or "error", C.bad) return end
+	setStatus(("%d sistema(s)"):format(#r.data.systems), C.ok)
+	showSystems(r.data.systems)
+end)
+
+---------------------------------------------------------------- pruebas reales en Play
+-- Script temporal que solo actúa cuando lo lanza este plugin (GetTestArgs). Ejecuta todos los
+-- ModuleScript "*.spec", recoge errores de consola y devuelve el informe con EndTest.
+local RUNNER_SOURCE = [==[
+local StudioTestService = game:GetService("StudioTestService")
+if StudioTestService:GetTestArgs() ~= "RobloxVaultTests" then return end
+local HttpService = game:GetService("HttpService")
+local LogService = game:GetService("LogService")
+local errors = {}
+LogService.MessageOut:Connect(function(msg, kind)
+	if kind == Enum.MessageType.MessageError and #errors < 50 then table.insert(errors, msg) end
+end)
+local function expect(actual)
+	local e = {}
+	function e.toBe(x) if actual ~= x then error(("esperaba %s, obtuve %s"):format(tostring(x), tostring(actual)), 2) end end
+	function e.toEqual(x) if HttpService:JSONEncode(actual) ~= HttpService:JSONEncode(x) then error("las tablas no son iguales", 2) end end
+	function e.toBeTruthy() if not actual then error("esperaba verdadero", 2) end end
+	function e.toBeFalsy() if actual then error("esperaba falso", 2) end end
+	function e.toBeCloseTo(x, eps) if math.abs(actual - x) > (eps or 1e-6) then error(("esperaba ~%s, obtuve %s"):format(tostring(x), tostring(actual)), 2) end end
+	function e.toThrow(frag) local ok, err = pcall(actual); if ok then error("esperaba un error", 2) end
+		if frag and not string.find(tostring(err), frag, 1, true) then error("el error no coincide: " .. tostring(err), 2) end end
+	return e
+end
+local report = { specs = {}, errors = errors }
+local roots = { game:GetService("ServerScriptService"), game:GetService("ReplicatedStorage"), game:GetService("ServerStorage") }
+for _, root in roots do
+	for _, m in root:GetDescendants() do
+		if m:IsA("ModuleScript") and string.sub(m.Name, -5) == ".spec" then
+			local results = {}
+			local t = { expect = expect, test = function(name, fn)
+				local ok, err = pcall(fn)
+				table.insert(results, { name = name, passed = ok, error = if ok then nil else tostring(err) })
+			end }
+			local load = function(name)
+				local target = m.Parent:FindFirstChild(name)
+				assert(target and target:IsA("ModuleScript"), "no encuentro el módulo " .. name)
+				return require(target)
+			end
+			local okReq, spec = pcall(require, m)
+			if okReq then
+				local okRun, err = pcall(spec, t, load)
+				if not okRun then table.insert(results, { name = "(spec)", passed = false, error = tostring(err) }) end
+			else
+				table.insert(results, { name = "(cargar spec)", passed = false, error = tostring(spec) })
+			end
+			local target = m.Parent:FindFirstChild(string.sub(m.Name, 1, -6))
+			table.insert(report.specs, { spec = m:GetFullName(), spec_id = m:GetAttribute("VaultAssetId"),
+				target_id = if target then target:GetAttribute("VaultAssetId") else nil, results = results })
+		end
+	end
+end
+task.wait(3) -- deja correr los scripts del juego para detectar errores al arrancar
+StudioTestService:EndTest(HttpService:JSONEncode(report))
+]==]
+
+local testing = false
+testBtn.MouseButton1Click:Connect(function()
+	if testing then return end
+	ask("¿Ejecutar las pruebas? Se iniciará una sesión de Play automática, se ejecutarán todos los ModuleScript *.spec y se guardarán los resultados reales en la bóveda.", function()
+		testing = true
+		testBtn.Text = "Probando…"
+		setStatus("Ejecutando pruebas en Play…")
+		local old = ServerScriptService:FindFirstChild("RobloxVaultTestRunner")
+		if old then old:Destroy() end
+		local runner = Instance.new("Script")
+		runner.Name = "RobloxVaultTestRunner"
+		runner.Source = RUNNER_SOURCE
+		runner.Parent = ServerScriptService
+		local ok, result = pcall(function() return StudioTestService:ExecutePlayModeAsync("RobloxVaultTests") end)
+		runner:Destroy()
+		testing = false
+		testBtn.Text = "Ejecutar pruebas"
+		if not ok then setStatus("No se pudo iniciar Play: " .. tostring(result), C.bad) return end
+		if type(result) ~= "string" then setStatus("La prueba terminó sin informe (¿la paraste a mano?).", C.warn) return end
+		local report = HttpService:JSONDecode(result)
+		local r = request("POST", "/tests", report)
+		local passed, total = 0, 0
+		for _, sp in report.specs do
+			for _, t in sp.results do total += 1; if t.passed then passed += 1 end end
+		end
+		local msg = ("Pruebas: %d/%d OK en %d spec(s)"):format(passed, total, #report.specs)
+		if #report.errors > 0 then msg ..= (" · %d error(es) en consola: %s"):format(#report.errors, report.errors[1]) end
+		if not r.ok then msg ..= " · no se guardó en la bóveda: " .. (r.err or "") end
+		setStatus(msg, if passed == total and #report.errors == 0 then C.ok else C.bad)
+	end)
 end)
 
 widget:GetPropertyChangedSignal("Enabled"):Connect(function() if widget.Enabled then refreshProject() end end)

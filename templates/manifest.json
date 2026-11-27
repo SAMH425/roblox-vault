@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "tested_by": "27 pruebas ejecutadas con Luau real (run_specs.luau) en cada compilación",
+  "systems": [
+    {
+      "name": "BASE · DataSave",
+      "description": "Guardado de datos de jugador con bloqueo de sesión (evita duplicar objetos), reintentos con espera creciente, plantilla por defecto con reconciliación, autoguardado y guardado al cerrar el servidor.",
+      "install": "1. Inserta el sistema: queda en ServerScriptService/DataSave.\n2. En un Script del servidor:\n   local DataService = require(game.ServerScriptService.DataSave.DataService)\n   DataService.start({ Coins = 0, Inventory = {} })\n3. Lee/escribe con DataService.get(player). Se guarda solo.",
+      "config": "Nombre del DataStore: PlayerData_v1 (DataService). Autoguardado: 120 s. Bloqueo caduca a los 600 s.",
+      "compatibility": "Requiere publicar el lugar y activar 'Enable Studio Access to API Services' para probar en Studio.",
+      "tests": "DataCore.spec: plantilla, guardar/cargar, bloqueo entre servidores, caducidad, reintentos, reconciliación, robo de bloqueo.",
+      "files": [
+        { "file": "DataSave/DataCore.luau", "role": "núcleo (puro)", "location": "ServerScriptService/DataSave" },
+        { "file": "DataSave/DataService.luau", "role": "servicio Roblox", "location": "ServerScriptService/DataSave" },
+        { "file": "DataSave/DataCore.spec.luau", "role": "pruebas", "location": "ServerScriptService/DataSave", "spec_of": "DataSave/DataCore.luau" }
+      ]
+    },
+    {
+      "name": "BASE · Economy & Shop",
+      "description": "Monedas y tienda validadas en el servidor: el cliente solo pide el objeto; precio, saldo y propiedad los decide el servidor. Límite contra spam y leaderstats.",
+      "install": "1. Inserta el sistema (ServerScriptService/Economy).\n2. Edita ShopConfig (precios, monedas iniciales).\n3. Desde el cliente: ReplicatedStorage.ShopRemotes.Purchase:InvokeServer(\"Sword\") → ok, error.\n4. Para guardar saldos: usa BASE · DataSave y copia profile.currencies/owned a tus datos.",
+      "config": "ShopConfig.Items: { price, currency, unique }. StartingCurrencies.",
+      "compatibility": "Sin dependencias. Combina con DataSave para persistencia.",
+      "tests": "CurrencyLogic.spec: sumar/gastar, cantidades tramposas (negativas, NaN, infinito, texto), saldo insuficiente, compras únicas y repetidas, objetos inexistentes.",
+      "files": [
+        { "file": "Economy/CurrencyLogic.luau", "role": "lógica (pura)", "location": "ServerScriptService/Economy" },
+        { "file": "Economy/ShopConfig.luau", "role": "configuración", "location": "ServerScriptService/Economy" },
+        { "file": "Economy/ShopServer.server.luau", "role": "servidor", "location": "ServerScriptService/Economy" },
+        { "file": "Economy/CurrencyLogic.spec.luau", "role": "pruebas", "location": "ServerScriptService/Economy", "spec_of": "Economy/CurrencyLogic.luau" }
+      ]
+    },
+    {
+      "name": "BASE · Inventory",
+      "description": "Inventario con pilas, capacidad, operaciones todo-o-nada y serialización segura para guardar (descarta objetos borrados o datos corruptos).",
+      "install": "1. Inserta el sistema (ReplicatedStorage/Inventory).\n2. local Inventory = require(game.ReplicatedStorage.Inventory.Inventory)\n   local inv = Inventory.new(20, { Apple = { maxStack = 10 } })\n3. Guarda inv:serialize() con DataSave y recupera con Inventory.load(...).",
+      "config": "Capacidad y maxStack por objeto en la tabla de definiciones.",
+      "compatibility": "Módulo puro: sirve en servidor y cliente (la autoridad debe ser el servidor).",
+      "tests": "Inventory.spec: apilado, todo-o-nada, objetos desconocidos, cantidades inválidas, quitar, serializar/cargar con basura.",
+      "files": [
+        { "file": "Inventory/Inventory.luau", "role": "lógica (pura)", "location": "ReplicatedStorage/Inventory" },
+        { "file": "Inventory/Inventory.spec.luau", "role": "pruebas", "location": "ReplicatedStorage/Inventory", "spec_of": "Inventory/Inventory.luau" }
+      ]
+    },
+    {
+      "name": "BASE · Rounds & Lobby",
+      "description": "Ciclo de rondas Lobby → Intermedio → Juego → Fin con mínimo de jugadores, eliminaciones, desconexiones y ganadores. Publica estado y tiempo para la interfaz.",
+      "install": "1. Inserta el sistema (ServerScriptService/Rounds).\n2. Pon partes llamadas LobbySpawn y ArenaSpawn en el mapa.\n3. La interfaz lee ReplicatedStorage.RoundState y RoundTime.",
+      "config": "RoundServer: minPlayers, intermission, roundLength, endScreen.",
+      "compatibility": "Sin dependencias.",
+      "tests": "RoundMachine.spec: espera de jugadores, cancelación, ronda completa, fin por tiempo, desconexiones.",
+      "files": [
+        { "file": "Rounds/RoundMachine.luau", "role": "máquina de estados (pura)", "location": "ServerScriptService/Rounds" },
+        { "file": "Rounds/RoundServer.server.luau", "role": "servidor", "location": "ServerScriptService/Rounds" },
+        { "file": "Rounds/RoundMachine.spec.luau", "role": "pruebas", "location": "ServerScriptService/Rounds", "spec_of": "Rounds/RoundMachine.luau" }
+      ]
+    },
+    {
+      "name": "BASE · AntiCheat",
+      "description": "Detección en servidor de speed hack y teletransportes imposibles con tolerancia al lag y a las caídas. Devuelve al jugador a su última posición válida.",
+      "install": "1. Inserta el sistema (ServerScriptService/AntiCheat).\n2. Antes de teletransportar a alguien a propósito: script.AllowTeleport:Invoke(player, segundos).",
+      "config": "AntiCheatServer.CONFIG: maxSpeed, tolerance, maxTeleport, strikesToFlag.",
+      "compatibility": "Respeta cambios de WalkSpeed hechos por el servidor.",
+      "tests": "MovementCheck.spec: andar, caídas, speed hack, picos de lag, teletransporte ilegal y permitido.",
+      "files": [
+        { "file": "AntiCheat/MovementCheck.luau", "role": "detector (puro)", "location": "ServerScriptService/AntiCheat" },
+        { "file": "AntiCheat/AntiCheatServer.server.luau", "role": "servidor", "location": "ServerScriptService/AntiCheat" },
+        { "file": "AntiCheat/MovementCheck.spec.luau", "role": "pruebas", "location": "ServerScriptService/AntiCheat", "spec_of": "AntiCheat/MovementCheck.luau" }
+      ]
+    },
+    {
+      "name": "BASE · Mobile Controls",
+      "description": "Botones táctiles (y teclas en PC/mando) con ContextActionService y un RemoteEvent validado en el servidor.",
+      "install": "1. Inserta el sistema: el LocalScript va a StarterPlayer/StarterPlayerScripts y el servidor a ServerScriptService.\n2. Añade acciones en ACTIONS (cliente) y en ALLOWED (servidor).",
+      "config": "ACTIONS: nombre, título, teclas, posición del botón.",
+      "compatibility": "Los botones táctiles solo aparecen en dispositivos táctiles.",
+      "tests": "Interfaz: se valida en Studio con el emulador de dispositivos.",
+      "files": [
+        { "file": "MobileControls/MobileControls.client.luau", "role": "cliente", "location": "StarterPlayer/StarterPlayerScripts" },
+        { "file": "MobileControls/MobileActionsServer.server.luau", "role": "servidor", "location": "ServerScriptService" }
+      ]
+    }
+  ]
+}
