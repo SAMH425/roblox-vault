@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Copy, Download, GitCompare, Plus, Save, Trash2, X } from 'lucide-react'
@@ -6,9 +6,11 @@ import { api, formatBytes, type Asset, type Project, type Version } from '../lib
 import { toastError, useToast } from '../state/toast'
 import { StatusBadge } from './ui'
 import { CodeView, DiffView } from './CodeView'
+const Viewer3D = lazy(() => import('./Viewer3D').then((m) => ({ default: m.Viewer3D })))
+const VIEWABLE = ['glb', 'gltf', 'obj', 'fbx', 'rbxm', 'rbxmx']
 
 /** Panel lateral: metadatos editables, versiones, código y comparación. */
-export function Inspector({ asset, projects, onClose, onChanged }: { asset: Asset | null; projects: Project[]; onClose: () => void; onChanged: () => void }) {
+export function Inspector({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset | null; projects: Project[]; onClose: () => void; onChanged: () => void; onThumb?: () => void }) {
   return (
     <AnimatePresence>
       {asset && (
@@ -16,7 +18,7 @@ export function Inspector({ asset, projects, onClose, onChanged }: { asset: Asse
           <motion.div className="fixed inset-0 z-30 bg-black/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
           <motion.aside key={asset.id} className="fixed top-0 right-0 z-30 flex h-full w-[640px] flex-col border-l border-white/[0.06] bg-surface shadow-2xl"
             initial={{ x: 660 }} animate={{ x: 0 }} exit={{ x: 660 }} transition={{ type: 'spring', damping: 30, stiffness: 300 }}>
-            <Body asset={asset} projects={projects} onClose={onClose} onChanged={onChanged} />
+            <Body asset={asset} projects={projects} onClose={onClose} onChanged={onChanged} onThumb={onThumb} />
           </motion.aside>
         </>
       )}
@@ -24,7 +26,7 @@ export function Inspector({ asset, projects, onClose, onChanged }: { asset: Asse
   )
 }
 
-function Body({ asset, projects, onClose, onChanged }: { asset: Asset; projects: Project[]; onClose: () => void; onChanged: () => void }) {
+function Body({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset; projects: Project[]; onClose: () => void; onChanged: () => void; onThumb?: () => void }) {
   const push = useToast((s) => s.push)
   const [name, setName] = useState(asset.name)
   const [projectId, setProjectId] = useState(asset.project_id ?? '')
@@ -70,6 +72,8 @@ function Body({ asset, projects, onClose, onChanged }: { asset: Asset; projects:
         <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={18} /></button>
       </div>
       <div className="flex-1 space-y-6 overflow-y-auto p-5">
+        {VIEWABLE.includes(asset.format) && <Suspense fallback={<div className="skeleton h-[380px]" />}><Viewer3D asset={asset} version={shown} onThumb={onThumb}
+          onMeta={(m) => api.updateAsset(asset.id, { metadata: m }).then(() => { setMeta(Object.entries(m).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])); onChanged() }).catch(() => {})} /></Suspense>}
         <section className="grid grid-cols-2 gap-3">
           <label className="text-xs text-zinc-400">Nombre<input className="input mt-1 w-full" value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label className="text-xs text-zinc-400">Proyecto<select className="input mt-1 w-full" value={projectId} onChange={(e) => setProjectId(e.target.value)}>

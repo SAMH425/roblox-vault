@@ -12,6 +12,9 @@ hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
+rbx_binary = "3"
+rbx_xml = "3"
+rbx_dom_weak = "4"
 
 [dev-dependencies]
 tempfile = "3"

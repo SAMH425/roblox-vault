@@ -6,6 +6,7 @@ import { api, formatBytes, STATUSES, type Asset, type Project, type Status } fro
 import { toastError, useToast } from '../state/toast'
 import { Empty, PageHeader, StatusBadge } from '../components/ui'
 import { Inspector } from '../components/Inspector'
+import { Thumb } from '../components/Thumb'
 
 type Sort = 'recent' | 'name' | 'size' | 'status'
 
@@ -17,8 +18,9 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
   const [projectId, setProjectId] = useState('')
   const [status, setStatusF] = useState('')
   const [sort, setSort] = useState<Sort>('recent')
-  const [view, setView] = useState<'list' | 'grid'>('list')
+  const [view, setView] = useState<'list' | 'grid'>(kind === 'model' ? 'grid' : 'list')
   const [sel, setSel] = useState<Asset | null>(null)
+  const [thumbBump, setThumbBump] = useState(0)
   const push = useToast((s) => s.push)
 
   const load = useCallback(() => {
@@ -78,7 +80,7 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
         : view === 'grid' ? (
           <div className="grid grid-cols-4 gap-4">{shown.map((a, i) => (
             <motion.button key={a.id} onClick={() => setSel(a)} className="card p-4 text-left transition-colors hover:border-violet/40" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.02 }} whileHover={{ y: -2 }}>
-              <div className="mb-3 grid h-24 place-items-center rounded-xl bg-panel/60 text-2xl font-semibold text-accent/70 uppercase">{a.format}</div>
+              <div className="mb-3 grid h-32 place-items-center overflow-hidden rounded-xl bg-panel/60"><Thumb asset={a} bump={thumbBump} /></div>
               <div className="truncate font-medium text-white">{a.name}</div>
               <div className="mt-1 flex items-center justify-between text-xs text-zinc-500"><span>v{a.version} · {formatBytes(a.size)}</span><StatusBadge s={a.status} /></div>
             </motion.button>))}</div>
@@ -107,7 +109,7 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
             </table>
           </div>
         )}
-      <Inspector asset={sel} projects={projects} onClose={() => setSel(null)} onChanged={changed} />
+      <Inspector asset={sel} projects={projects} onClose={() => setSel(null)} onChanged={changed} onThumb={() => setThumbBump((b) => b + 1)} />
     </div>
   )
 }

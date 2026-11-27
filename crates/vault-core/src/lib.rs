@@ -2,6 +2,7 @@
 //! direccionados por contenido (SHA-256) para los originales.
 //! Independiente de Tauri para poder probarlo y reutilizarlo desde el MCP.
 
+pub mod roblox;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -89,7 +90,7 @@ pub fn safe_relative(p: &str) -> Result<PathBuf> {
 impl Vault {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
-        for d in ["blobs", "backups", "restored"] { fs::create_dir_all(root.join(d))?; }
+        for d in ["blobs", "backups", "restored", "thumbs"] { fs::create_dir_all(root.join(d))?; }
         let conn = Connection::open(root.join("vault.db"))?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
         let v = Vault { root, conn };
@@ -171,13 +172,19 @@ impl Vault {
             if a.sha256 == hash { return Ok(ImportResult { asset: a, duplicate_of: Some(aid.into()), new_version: false }); }
             self.conn.execute("INSERT INTO asset_versions VALUES (?,?,?,?,?,?)", params![uuid::Uuid::new_v4().to_string(), aid, a.version + 1, hash, "", t])?;
             self.conn.execute("UPDATE assets SET updated_at=?, status='PENDING' WHERE id=?", params![t, aid])?;
+            if let Some(extra) = roblox_meta(src, &a.format) {
+                let mut m = a.metadata.clone();
+                if let (Some(o), Some(e)) = (m.as_object_mut(), extra.as_object()) { for (k, v) in e { o.insert(k.clone(), v.clone()); } }
+                self.conn.execute("UPDATE assets SET metadata=? WHERE id=?", params![m.to_string(), aid])?;
+            }
             self.log("app", "asset.version", &a.name, &format!("v{}", a.version + 1), false)?;
             aid.to_string()
         } else {
             let (kind, format) = classify(&original);
             let name = Path::new(&original).file_stem().and_then(|s| s.to_str()).unwrap_or(&original).to_string();
             let id = uuid::Uuid::new_v4().to_string();
-            let (name, meta) = if kind == "script" { let (n, st) = script_type(&name); (n, serde_json::json!({ "script_type": st })) } else { (name, serde_json::json!({})) };
+            let (name, mut meta) = if kind == "script" { let (n, st) = script_type(&name); (n, serde_json::json!({ "script_type": st })) } else { (name, serde_json::json!({})) };
+            if let Some(extra) = roblox_meta(src, &format) { meta = extra; }
             self.conn.execute("INSERT INTO assets(id,project_id,kind,name,format,original_name,status,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?, 'PENDING',?,?,?)",
                 params![id, project_id, kind, name, format, original, meta.to_string(), t, t])?;
             self.conn.execute("INSERT INTO asset_versions VALUES (?,?,1,?,?,?)", params![uuid::Uuid::new_v4().to_string(), id, hash, "", t])?;
@@ -416,6 +423,58 @@ impl Vault {
     }
 }
 
+
+fn roblox_meta(src: &Path, format: &str) -> Option<serde_json::Value> {
+    if format != "rbxm" && format != "rbxmx" { return None; }
+    let bytes = fs::read(src).ok()?;
+    Some(match roblox::parse(&bytes, format) {
+        Ok(m) => roblox::summary(&m),
+        Err(e) => serde_json::json!({ "parse_error": e }),
+    })
+}
+
+impl Vault {
+    fn blob_path(&self, asset_id: &str, version: Option<i64>) -> Result<(PathBuf, Asset)> {
+        let a = self.get_asset(asset_id)?;
+        let v = version.unwrap_or(a.version);
+        let rel: String = self.conn.query_row("SELECT b.rel_path FROM asset_versions v JOIN blobs b ON b.sha256=v.sha256 WHERE v.asset_id=? AND v.version=?",
+            params![asset_id, v], |r| r.get(0)).optional()?.ok_or_else(|| VaultError::NotFound(format!("{asset_id} v{v}")))?;
+        Ok((self.root.join(safe_relative(&rel)?), a))
+    }
+
+    /// Bytes del original (para el visor 3D). Límite 512 MB.
+    pub fn read_blob(&self, asset_id: &str, version: Option<i64>) -> Result<Vec<u8>> {
+        let (p, _) = self.blob_path(asset_id, version)?;
+        if fs::metadata(&p)?.len() > 512 * 1024 * 1024 { return Err(VaultError::Invalid("archivo demasiado grande para el visor".into())); }
+        Ok(fs::read(p)?)
+    }
+
+    pub fn roblox_scene(&self, asset_id: &str, version: Option<i64>) -> Result<roblox::RbxModel> {
+        let (p, a) = self.blob_path(asset_id, version)?;
+        roblox::parse(&fs::read(p)?, &a.format).map_err(VaultError::Invalid)
+    }
+
+    fn thumb_path(&self, asset_id: &str) -> Result<PathBuf> {
+        uuid::Uuid::parse_str(asset_id).map_err(|_| VaultError::Invalid("id inválido".into()))?;
+        Ok(self.root.join("thumbs").join(format!("{asset_id}.png")))
+    }
+
+    /// Guarda la miniatura renderizada (PNG). Valida la firma PNG.
+    pub fn save_thumbnail(&self, asset_id: &str, png: &[u8]) -> Result<()> {
+        self.get_asset(asset_id)?;
+        if png.len() < 8 || &png[..8] != b"\x89PNG\r\n\x1a\n" || png.len() > 4 * 1024 * 1024 { return Err(VaultError::Invalid("miniatura PNG inválida".into())); }
+        let p = self.thumb_path(asset_id)?;
+        fs::create_dir_all(p.parent().unwrap())?;
+        fs::write(p, png)?;
+        Ok(())
+    }
+
+    pub fn thumbnail(&self, asset_id: &str) -> Result<Option<Vec<u8>>> {
+        let p = self.thumb_path(asset_id)?;
+        Ok(if p.exists() { Some(fs::read(p)?) } else { None })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,5 +573,23 @@ mod tests {
         let up = v.update_asset(&a.id, Some("InvCtrl"), None, Some(&serde_json::json!({"script_type":"LocalScript","notes":"x"}))).unwrap();
         assert_eq!(up.name, "InvCtrl");
         assert!(v.update_asset(&a.id, None, None, Some(&serde_json::json!([1]))).is_err());
+    }
+
+    #[test]
+    fn rbxmx_import_extracts_metadata_and_thumbnail() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        let xml = r#"<roblox version="4"><Item class="Part" referent="A"><Properties><string name="Name">P</string><Vector3 name="size"><X>2</X><Y>3</Y><Z>4</Z></Vector3></Properties></Item></roblox>"#;
+        let a = v.import_file(&file(src.path(), "Crate.rbxmx", xml.as_bytes()), None, None).unwrap().asset;
+        assert_eq!(a.metadata["pieces"], 1);
+        assert_eq!(v.roblox_scene(&a.id, None).unwrap().parts[0].size, [2.0, 3.0, 4.0]);
+        assert_eq!(v.read_blob(&a.id, None).unwrap(), xml.as_bytes());
+        assert!(v.save_thumbnail(&a.id, b"notapng").is_err());
+        v.save_thumbnail(&a.id, b"\x89PNG\r\n\x1a\nxxxx").unwrap();
+        assert!(v.thumbnail(&a.id).unwrap().is_some());
+        assert!(v.thumbnail("../../etc").is_err());
+        let bad = v.import_file(&file(src.path(), "Bad.rbxm", b"garbage"), None, None).unwrap().asset;
+        assert!(bad.metadata.get("parse_error").is_some());
     }
 }

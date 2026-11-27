@@ -38,6 +38,12 @@ fn e<E: std::fmt::Display>(x: E) -> String { x.to_string() }
 #[tauri::command] fn restore_system(s: tauri::State<AppState>, id: String, dest_dir: String) -> R<Vec<String>> {
     s.0.lock().map_err(e)?.restore_system(&id, &PathBuf::from(dest_dir)).map(|v| v.iter().map(|p| p.display().to_string()).collect()).map_err(e) }
 
+#[tauri::command] fn read_blob(s: tauri::State<AppState>, id: String, version: Option<i64>) -> R<tauri::ipc::Response> {
+    s.0.lock().map_err(e)?.read_blob(&id, version).map(tauri::ipc::Response::new).map_err(e) }
+#[tauri::command] fn roblox_scene(s: tauri::State<AppState>, id: String, version: Option<i64>) -> R<roblox::RbxModel> { s.0.lock().map_err(e)?.roblox_scene(&id, version).map_err(e) }
+#[tauri::command] fn save_thumbnail(s: tauri::State<AppState>, id: String, png: Vec<u8>) -> R<()> { s.0.lock().map_err(e)?.save_thumbnail(&id, &png).map_err(e) }
+#[tauri::command] fn thumbnail(s: tauri::State<AppState>, id: String) -> R<tauri::ipc::Response> { s.0.lock().map_err(e)?.thumbnail(&id).map(|o| tauri::ipc::Response::new(o.unwrap_or_default())).map_err(e) }
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -51,7 +57,7 @@ pub fn run() {
             app.manage(AppState(Mutex::new(Vault::open(root)?)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system])
+        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail])
         .run(tauri::generate_context!())
         .expect("error al iniciar ROBLOX VAULT");
 }
