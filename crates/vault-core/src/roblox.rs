@@ -173,7 +173,7 @@ pub fn to_rbxm(bytes: &[u8], format: &str) -> Result<Vec<u8>, String> {
 
 /// Metadatos resumidos para guardar en la ficha del recurso.
 pub fn summary(m: &RbxModel) -> serde_json::Value {
-    let dims: Vec<f32> = (0..3).map(|a| ((m.bounds_max[a] - m.bounds_min[a]) * 100.0).round() / 100.0).collect();
+    let dims: Vec<f64> = (0..3).map(|a| (((m.bounds_max[a] - m.bounds_min[a]) as f64) * 100.0).round() / 100.0).collect();
     serde_json::json!({
         "pieces": m.parts.len(),
         "instances": m.instance_count,

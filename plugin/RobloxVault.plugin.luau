@@ -158,7 +158,11 @@ end
 
 linkBtn.MouseButton1Click:Connect(function()
 	if placeId() == 0 then setStatus("Publica el lugar primero (PlaceId 0).", C.warn) return end
-	local r = request("POST", "/project/link", { place_id = placeId(), name = game.Name })
+	-- game.Name en Studio suele ser "Place1": usamos el nombre publicado de la experiencia
+	local name = game.Name
+	local okInfo, info = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(placeId()) end)
+	if okInfo and info and info.Name and info.Name ~= "" then name = info.Name end
+	local r = request("POST", "/project/link", { place_id = placeId(), name = name })
 	if r.ok then setStatus("Vinculado a " .. r.data.project.name, C.ok) refreshProject() else setStatus(r.err or "error", C.bad) end
 end)
 
