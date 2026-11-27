@@ -18,6 +18,13 @@ export interface Version { version: number; sha256: string; size: number; note: 
 export interface SystemInput { name: string; project_id: string | null; description: string; install: string; config: string; compatibility: string; tests: string }
 export interface VaultSystem extends SystemInput { id: string; status: Status; created_at: string; updated_at: string; members: { role: string; asset: Asset }[]; warnings: string[] }
 
+export interface DepNode { asset: Asset; note: string; depth: number }
+export interface DepReport { direct: DepNode[]; all: DepNode[]; dependents: Asset[]; problems: string[]; unresolved_requires: string[]; suggestions: Asset[] }
+export interface Capture { id: string; source_path: string; project_id: string | null; tested: boolean; test_passed: boolean | null; test_output: string; note: string; actor: string; state: 'pending' | 'approved' | 'rejected'; asset_id: string | null; created_at: string }
+export type NoteKind = 'decision' | 'bug' | 'change' | 'architecture'
+export interface ProjectNote { id: number; kind: NoteKind; text: string; created_at: string }
+export interface ProjectContext { project: Project; assets: Asset[]; systems: VaultSystem[]; notes: ProjectNote[]; recent: Activity[] }
+
 export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -42,6 +49,18 @@ export const api = {
   scene: (id: string, version?: number) => call<import('./models').RbxModel>('roblox_scene', { id, version: version ?? null }),
   saveThumb: (id: string, png: Uint8Array) => call<void>('save_thumbnail', { id, png: Array.from(png) }),
   thumb: async (id: string) => { const b = await call<ArrayBuffer>('thumbnail', { id }); return b.byteLength ? b : null },
+  addDep: (assetId: string, dependsOn: string, note = '') => call<void>('add_dependency', { assetId, dependsOn, note }),
+  removeDep: (assetId: string, dependsOn: string) => call<void>('remove_dependency', { assetId, dependsOn }),
+  deps: (id: string) => call<DepReport>('dependency_report', { id }),
+  history: (id: string) => call<Activity[]>('asset_history', { id }),
+  captures: (state?: string) => call<Capture[]>('list_captures', { state: state ?? null }),
+  decideCapture: (id: string, approve: boolean) => call<Capture>('decide_capture', { id, approve }),
+  getSetting: (key: string) => call<string | null>('get_setting', { key }),
+  setSetting: (key: string, value: string) => call<void>('set_setting', { key, value }),
+  projectContext: (id: string) => call<ProjectContext>('project_context', { id }),
+  updateProject: (id: string, name: string, description: string, architecture: string) => call<Project>('update_project', { id, name, description, architecture }),
+  addNote: (projectId: string, kind: NoteKind, text: string) => call<ProjectNote>('add_project_note', { projectId, kind, text }),
+  deleteNote: (id: number) => call<void>('delete_project_note', { id }),
   versions: (id: string) => call<Version[]>('list_versions', { id }),
   text: (id: string, version?: number) => call<string | null>('get_text', { id, version: version ?? null }),
   addVersion: (id: string, path: string) => call<ImportResult>('add_version', { id, path }),

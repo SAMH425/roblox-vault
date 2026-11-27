@@ -31,8 +31,19 @@
 - Limitaciones: MeshPart/Unions guardan la malla en la nube de Roblox → se dibujan como caja en alambre con su
   tamaño real. GLTF con .bin externos → importar como GLB.
 
+## Fase 4 — MEMORIA ✅
+- Dependencias entre recursos: directas, en cadena, quién lo usa; detecta FAILED/DEPRECATED, originales
+  faltantes y ciclos. Lee `require(...)` del código Luau y sugiere módulos de la bóveda o avisa si no existen.
+- Historial por recurso (actividad ligada al recurso).
+- Captura híbrida: probado+OK → PARTIALLY VERIFIED automático (configurable); probado+falla → FAILED;
+  sin probar → cola de aprobación (Activity → Captura). Guarda la salida de las pruebas en metadatos.
+- Project Memory: arquitectura, decisiones técnicas, errores conocidos, cambios recientes, recursos,
+  sistemas y actividad del proyecto.
+- Animations: KeyframeSequence en .rbxm/.rbxmx → keyframes, duración, bucle, articulaciones.
+- Pruebas: 9 Rust + 5 Vitest.
+
 ## Pendiente
-- Fase 4: dependencias, historial, captura, animaciones. Fase 5: MCP. Fase 6: plugin Studio. Fase 7: pulido + instalador.
+- Fase 5: MCP. Fase 6: plugin Studio. Fase 7: pulido + instalador.
 
 ## Limitaciones conocidas
 - La app se compiló y probó en Linux; falta la primera ejecución en Windows.

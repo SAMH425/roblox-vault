@@ -8,7 +8,8 @@ import { PageHeader } from '../components/ui'
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [acts, setActs] = useState<Activity[]>([])
-  useEffect(() => { api.stats().then(setStats).catch(toastError); api.activity(8).then(setActs).catch(() => {}) }, [])
+  const [pending, setPending] = useState(0)
+  useEffect(() => { api.stats().then(setStats).catch(toastError); api.activity(8).then(setActs).catch(() => {}); api.captures('pending').then((c) => setPending(c.length)).catch(() => {}) }, [])
 
   const cards = stats ? [
     { label: 'Recursos', value: stats.assets, icon: Boxes },
@@ -20,6 +21,7 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Estado real de tu bóveda" />
+      {pending > 0 && <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3 text-sm text-amber-200">{pending} recurso(s) de Claude esperan tu aprobación en Activity → Captura.</div>}
       <div className="grid grid-cols-4 gap-4">
         {stats ? cards.map((c, i) => (
           <motion.div key={c.label} className="card p-5" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>

@@ -24,7 +24,7 @@ pub enum VaultError {
 }
 pub type Result<T> = std::result::Result<T, VaultError>;
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/001_init.sql")), (2, include_str!("../migrations/002_library.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/001_init.sql")), (2, include_str!("../migrations/002_library.sql")), (3, include_str!("../migrations/003_memory.sql"))];
 pub const STATUSES: &[&str] = &["VERIFIED", "PARTIALLY VERIFIED", "PENDING", "FAILED", "DEPRECATED"];
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -109,8 +109,12 @@ impl Vault {
     }
 
     pub fn log(&self, actor: &str, action: &str, target: &str, detail: &str, destructive: bool) -> Result<()> {
-        self.conn.execute("INSERT INTO activity(at,actor,action,target,detail,destructive) VALUES (?,?,?,?,?,?)",
-            params![now(), actor, action, target, detail, destructive as i64])?;
+        self.log_asset(actor, action, None, target, detail, destructive)
+    }
+
+    pub fn log_asset(&self, actor: &str, action: &str, asset_id: Option<&str>, target: &str, detail: &str, destructive: bool) -> Result<()> {
+        self.conn.execute("INSERT INTO activity(at,actor,action,target,detail,destructive,asset_id) VALUES (?,?,?,?,?,?,?)",
+            params![now(), actor, action, target, detail, destructive as i64, asset_id])?;
         Ok(())
     }
 
@@ -177,18 +181,23 @@ impl Vault {
                 if let (Some(o), Some(e)) = (m.as_object_mut(), extra.as_object()) { for (k, v) in e { o.insert(k.clone(), v.clone()); } }
                 self.conn.execute("UPDATE assets SET metadata=? WHERE id=?", params![m.to_string(), aid])?;
             }
-            self.log("app", "asset.version", &a.name, &format!("v{}", a.version + 1), false)?;
+            self.log_asset("app", "asset.version", Some(aid), &a.name, &format!("v{}", a.version + 1), false)?;
             aid.to_string()
         } else {
             let (kind, format) = classify(&original);
             let name = Path::new(&original).file_stem().and_then(|s| s.to_str()).unwrap_or(&original).to_string();
             let id = uuid::Uuid::new_v4().to_string();
+            let (mut kind, format) = (kind, format);
             let (name, mut meta) = if kind == "script" { let (n, st) = script_type(&name); (n, serde_json::json!({ "script_type": st })) } else { (name, serde_json::json!({})) };
-            if let Some(extra) = roblox_meta(src, &format) { meta = extra; }
+            if let Some(extra) = roblox_meta(src, &format) {
+                let anims = extra["animations"].as_array().map_or(0, |a| a.len());
+                if anims > 0 && extra["pieces"].as_u64() == Some(0) { kind = "animation".into(); }
+                meta = extra;
+            }
             self.conn.execute("INSERT INTO assets(id,project_id,kind,name,format,original_name,status,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?, 'PENDING',?,?,?)",
                 params![id, project_id, kind, name, format, original, meta.to_string(), t, t])?;
             self.conn.execute("INSERT INTO asset_versions VALUES (?,?,1,?,?,?)", params![uuid::Uuid::new_v4().to_string(), id, hash, "", t])?;
-            self.log("app", "asset.import", &original, &hash[..12], false)?;
+            self.log_asset("app", "asset.import", Some(&id), &original, &hash[..12], false)?;
             id
         };
         Ok(ImportResult { asset: self.get_asset(&id)?, duplicate_of, new_version: update_asset_id.is_some() })
@@ -224,7 +233,7 @@ impl Vault {
         if !STATUSES.contains(&status) { return Err(VaultError::Invalid(format!("estado inválido: {status}"))); }
         let n = self.conn.execute("UPDATE assets SET status=?, updated_at=? WHERE id=?", params![status, now(), id])?;
         if n == 0 { return Err(VaultError::NotFound(id.into())); }
-        self.log("app", "asset.status", id, status, false)
+        self.log_asset("app", "asset.status", Some(id), id, status, false)
     }
 
     /// Restaura una versión a `dest_dir/<nombre original>`. Nunca sobrescribe:
@@ -245,7 +254,7 @@ impl Vault {
         let mut i = 1;
         while dest.exists() { dest = dest_dir.join(format!("{stem} ({i}){ext}")); i += 1; }
         fs::copy(&src, &dest)?;
-        self.log("app", "asset.restore", &a.name, &format!("v{v} -> {}", dest.display()), false)?;
+        self.log_asset("app", "asset.restore", Some(id), &a.name, &format!("v{v} -> {}", dest.display()), false)?;
         Ok(dest)
     }
 
@@ -342,7 +351,7 @@ impl Vault {
         let meta = metadata.cloned().unwrap_or(a.metadata.clone());
         if !meta.is_object() { return Err(VaultError::Invalid("metadata debe ser un objeto".into())); }
         self.conn.execute("UPDATE assets SET name=?, project_id=?, metadata=?, updated_at=? WHERE id=?", params![name, pid, meta.to_string(), now(), id])?;
-        self.log("app", "asset.update", name, "", false)?;
+        self.log_asset("app", "asset.update", Some(id), name, "", false)?;
         self.get_asset(id)
     }
 
@@ -475,6 +484,194 @@ impl Vault {
     }
 }
 
+
+/// Nombres de módulos usados en `require(...)` dentro de código Luau.
+/// Reconoce `require(x.Name)`, `require(x:WaitForChild("Name"))`, `require(x["Name"])` y `require(script.Parent.Name)`.
+pub fn luau_requires(src: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut rest = src;
+    while let Some(i) = rest.find("require") {
+        rest = &rest[i + 7..];
+        let r = rest.trim_start();
+        if !r.starts_with('(') { continue; }
+        let mut depth = 0; let mut end = 0;
+        for (j, c) in r.char_indices() { if c == '(' { depth += 1 } else if c == ')' { depth -= 1; if depth == 0 { end = j; break; } } }
+        if end == 0 { continue; }
+        let arg = r[1..end].trim();
+        let name = if let Some(q) = arg.rfind(|c| c == '"' || c == '\'') {
+            let before = &arg[..q];
+            before.rfind(|c| c == '"' || c == '\'').map(|s| before[s + 1..].to_string())
+        } else {
+            arg.rsplit(|c: char| c == '.' || c == ':').next().map(|s| s.trim().to_string())
+        };
+        if let Some(n) = name { if !n.is_empty() && !n.starts_with(|c: char| c.is_ascii_digit()) && n.chars().all(|c| c.is_alphanumeric() || c == '_') && !out.contains(&n) { out.push(n); } }
+    }
+    out
+}
+
+#[derive(Serialize, Debug)]
+pub struct DepNode { pub asset: Asset, pub note: String, pub depth: usize }
+
+#[derive(Serialize, Debug)]
+pub struct DepReport { pub direct: Vec<DepNode>, pub all: Vec<DepNode>, pub dependents: Vec<Asset>, pub problems: Vec<String>, pub unresolved_requires: Vec<String>, pub suggestions: Vec<Asset> }
+
+#[derive(Serialize, Debug, Clone)]
+pub struct Capture { pub id: String, pub source_path: String, pub project_id: Option<String>, pub tested: bool, pub test_passed: Option<bool>, pub test_output: String, pub note: String, pub actor: String, pub state: String, pub asset_id: Option<String>, pub created_at: String }
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ProjectNote { pub id: i64, pub kind: String, pub text: String, pub created_at: String }
+
+#[derive(Serialize, Debug)]
+pub struct ProjectContext { pub project: Project, pub assets: Vec<Asset>, pub systems: Vec<System>, pub notes: Vec<ProjectNote>, pub recent: Vec<Activity> }
+
+impl Vault {
+    // ---------- dependencias ----------
+    pub fn add_dependency(&self, asset_id: &str, depends_on: &str, note: &str) -> Result<()> {
+        if asset_id == depends_on { return Err(VaultError::Invalid("un recurso no puede depender de sí mismo".into())); }
+        self.get_asset(asset_id)?; self.get_asset(depends_on)?;
+        self.conn.execute("INSERT INTO asset_deps VALUES (?,?,?) ON CONFLICT DO UPDATE SET note=excluded.note", params![asset_id, depends_on, note])?;
+        self.log_asset("app", "dependency.add", Some(asset_id), asset_id, depends_on, false)
+    }
+    pub fn remove_dependency(&self, asset_id: &str, depends_on: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM asset_deps WHERE asset_id=? AND depends_on=?", params![asset_id, depends_on])?;
+        self.log_asset("app", "dependency.remove", Some(asset_id), asset_id, depends_on, true)
+    }
+
+    /// Dependencias directas y transitivas, quién depende de este recurso, problemas
+    /// (faltantes, FAILED/DEPRECATED, ciclos) y `require` del código sin resolver.
+    pub fn dependency_report(&self, asset_id: &str) -> Result<DepReport> {
+        let root = self.get_asset(asset_id)?;
+        let deps_of = |id: &str| -> Result<Vec<(String, String)>> {
+            let mut st = self.conn.prepare("SELECT depends_on, note FROM asset_deps WHERE asset_id=?")?;
+            let r = st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?; Ok(r)
+        };
+        let mut all: Vec<DepNode> = vec![]; let mut problems = vec![];
+        let mut seen = std::collections::HashSet::from([asset_id.to_string()]);
+        let mut stack: Vec<(String, String, usize, Vec<String>)> = deps_of(asset_id)?.into_iter().map(|(d, n)| (d, n, 1, vec![asset_id.to_string()])).collect();
+        stack.reverse();
+        while let Some((id, note, depth, chain)) = stack.pop() {
+            if chain.contains(&id) { problems.push(format!("ciclo de dependencias: {} → {id}", chain.join(" → "))); continue; }
+            if !seen.insert(id.clone()) { continue; }
+            let a = self.get_asset(&id)?;
+            let blob = self.root.join("blobs").join(&a.sha256[..2]).join(&a.sha256);
+            if !blob.exists() { problems.push(format!("{}: falta el archivo original", a.name)); }
+            if a.status == "FAILED" || a.status == "DEPRECATED" { problems.push(format!("{}: {}", a.name, a.status)); }
+            let mut ch = chain.clone(); ch.push(id.clone());
+            for (d, n) in deps_of(&id)?.into_iter().rev() { stack.push((d, n, depth + 1, ch.clone())); }
+            all.push(DepNode { asset: a, note, depth });
+        }
+        let direct = deps_of(asset_id)?.into_iter().map(|(d, n)| Ok(DepNode { asset: self.get_asset(&d)?, note: n, depth: 1 })).collect::<Result<Vec<_>>>()?;
+        let mut st = self.conn.prepare("SELECT asset_id FROM asset_deps WHERE depends_on=?")?;
+        let dependents = st.query_map([asset_id], |r| r.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?.iter().map(|i| self.get_asset(i)).collect::<Result<Vec<_>>>()?;
+        // require() sin resolver y sugerencias por nombre
+        let mut unresolved = vec![]; let mut suggestions = vec![];
+        if let Some(text) = self.get_text(asset_id, None)? {
+            for name in luau_requires(&text) {
+                if direct.iter().any(|d| d.asset.name == name) { continue; }
+                let found: Vec<Asset> = self.search_assets(Some("script"), None, None, false)?.into_iter().filter(|a| a.name == name && a.id != root.id).collect();
+                if found.is_empty() { unresolved.push(name) } else { suggestions.extend(found) }
+            }
+        }
+        Ok(DepReport { direct, all, dependents, problems, unresolved_requires: unresolved, suggestions })
+    }
+
+    pub fn asset_history(&self, asset_id: &str, limit: i64) -> Result<Vec<Activity>> {
+        let mut s = self.conn.prepare("SELECT id,at,actor,action,target,detail,destructive FROM activity WHERE asset_id=? ORDER BY id DESC LIMIT ?")?;
+        let r = s.query_map(params![asset_id, limit.clamp(1, 500)], |r| Ok(Activity { id: r.get(0)?, at: r.get(1)?, actor: r.get(2)?, action: r.get(3)?, target: r.get(4)?, detail: r.get(5)?, destructive: r.get::<_, i64>(6)? != 0 }))?;
+        Ok(r.collect::<std::result::Result<_, _>>()?)
+    }
+
+    // ---------- ajustes ----------
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM settings WHERE key=?", [key], |r| r.get(0)).optional()?)
+    }
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value])?;
+        self.log("app", "settings.set", key, value, false)
+    }
+    pub fn auto_capture_tested(&self) -> Result<bool> { Ok(self.setting("auto_capture_tested")?.as_deref() != Some("false")) }
+
+    // ---------- captura híbrida ----------
+    /// Registra un recurso construido (p. ej. por Claude):
+    /// - probado y pasó + auto-captura activa → se importa ya como PARTIALLY VERIFIED;
+    /// - probado y falló → se importa como FAILED (nunca como funcional);
+    /// - no probado (o auto-captura apagada) → queda pendiente de aprobación.
+    pub fn capture(&self, src: &Path, project_id: Option<&str>, tested: bool, test_passed: Option<bool>, test_output: &str, note: &str, actor: &str) -> Result<Capture> {
+        if !src.is_file() { return Err(VaultError::NotFound(src.display().to_string())); }
+        if tested && test_passed.is_none() { return Err(VaultError::Invalid("si tested=true hay que indicar test_passed".into())); }
+        let id = uuid::Uuid::new_v4().to_string();
+        let auto = tested && (test_passed == Some(false) || self.auto_capture_tested()?);
+        self.conn.execute("INSERT INTO captures(id,source_path,project_id,tested,test_passed,test_output,note,actor,state,created_at) VALUES (?,?,?,?,?,?,?,?, 'pending', ?)",
+            params![id, src.display().to_string(), project_id, tested, test_passed, test_output, note, actor, now()])?;
+        self.log("app", "capture.create", &src.display().to_string(), if auto { "auto" } else { "pendiente de aprobación" }, false)?;
+        if auto { self.decide_capture(&id, true, actor)?; }
+        self.get_capture(&id)
+    }
+
+    pub fn get_capture(&self, id: &str) -> Result<Capture> {
+        self.conn.query_row("SELECT id,source_path,project_id,tested,test_passed,test_output,note,actor,state,asset_id,created_at FROM captures WHERE id=?", [id], |r| Ok(Capture {
+            id: r.get(0)?, source_path: r.get(1)?, project_id: r.get(2)?, tested: r.get(3)?, test_passed: r.get(4)?, test_output: r.get(5)?, note: r.get(6)?,
+            actor: r.get(7)?, state: r.get(8)?, asset_id: r.get(9)?, created_at: r.get(10)? })).optional()?.ok_or_else(|| VaultError::NotFound(id.into()))
+    }
+
+    pub fn list_captures(&self, state: Option<&str>) -> Result<Vec<Capture>> {
+        let mut s = self.conn.prepare("SELECT id FROM captures WHERE (?1 IS NULL OR state=?1) ORDER BY created_at DESC LIMIT 200")?;
+        let ids: Vec<String> = s.query_map([state], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+        ids.iter().map(|i| self.get_capture(i)).collect()
+    }
+
+    pub fn decide_capture(&self, id: &str, approve: bool, actor: &str) -> Result<Capture> {
+        let c = self.get_capture(id)?;
+        if c.state != "pending" { return Err(VaultError::Invalid("esta captura ya fue decidida".into())); }
+        let mut asset_id = None;
+        if approve {
+            let r = self.import_file(Path::new(&c.source_path), c.project_id.as_deref(), None)?;
+            let status = match (c.tested, c.test_passed) { (true, Some(true)) => "PARTIALLY VERIFIED", (true, Some(false)) => "FAILED", _ => "PENDING" };
+            // un duplicado ya existente no se degrada a PENDING
+            if r.duplicate_of.is_none() || status != "PENDING" { self.set_status(&r.asset.id, status)?; }
+            if !c.test_output.is_empty() {
+                let mut m = r.asset.metadata.clone();
+                if let Some(o) = m.as_object_mut() {
+                    o.insert("last_test".into(), serde_json::json!({ "passed": c.test_passed, "output": c.test_output.chars().take(4000).collect::<String>(), "at": now() }));
+                }
+                self.update_asset(&r.asset.id, None, None, Some(&m))?;
+            }
+            asset_id = Some(r.asset.id);
+        }
+        self.conn.execute("UPDATE captures SET state=?, asset_id=?, decided_at=? WHERE id=?", params![if approve { "approved" } else { "rejected" }, asset_id, now(), id])?;
+        self.log("app", if approve { "capture.approve" } else { "capture.reject" }, &c.source_path, actor, !approve)?;
+        self.get_capture(id)
+    }
+
+    // ---------- memoria de proyecto ----------
+    pub fn add_project_note(&self, project_id: &str, kind: &str, text: &str) -> Result<ProjectNote> {
+        if text.trim().is_empty() { return Err(VaultError::Invalid("nota vacía".into())); }
+        self.conn.execute("INSERT INTO project_notes(project_id,kind,text,created_at) VALUES (?,?,?,?)", params![project_id, kind, text.trim(), now()])
+            .map_err(|e| if e.to_string().contains("CHECK") { VaultError::Invalid(format!("tipo de nota inválido: {kind}")) } else if e.to_string().contains("FOREIGN") { VaultError::NotFound(project_id.into()) } else { e.into() })?;
+        let id = self.conn.last_insert_rowid();
+        self.log("app", "project.note", project_id, kind, false)?;
+        Ok(ProjectNote { id, kind: kind.into(), text: text.trim().into(), created_at: now() })
+    }
+    pub fn delete_project_note(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM project_notes WHERE id=?", [id])?;
+        self.log("app", "project.note.delete", &id.to_string(), "", true)
+    }
+    pub fn update_project(&self, id: &str, name: &str, description: &str, architecture: &str) -> Result<Project> {
+        if name.trim().is_empty() { return Err(VaultError::Invalid("nombre vacío".into())); }
+        if self.conn.execute("UPDATE projects SET name=?, description=?, architecture=?, updated_at=? WHERE id=?", params![name.trim(), description, architecture, now(), id])? == 0 { return Err(VaultError::NotFound(id.into())); }
+        self.log("app", "project.update", name, "", false)?;
+        self.list_projects()?.into_iter().find(|p| p.id == id).ok_or_else(|| VaultError::NotFound(id.into()))
+    }
+    pub fn project_context(&self, id: &str) -> Result<ProjectContext> {
+        let project = self.list_projects()?.into_iter().find(|p| p.id == id).ok_or_else(|| VaultError::NotFound(id.into()))?;
+        let mut s = self.conn.prepare("SELECT id,kind,text,created_at FROM project_notes WHERE project_id=? ORDER BY id DESC")?;
+        let notes = s.query_map([id], |r| Ok(ProjectNote { id: r.get(0)?, kind: r.get(1)?, text: r.get(2)?, created_at: r.get(3)? }))?.collect::<std::result::Result<_, _>>()?;
+        let mut s = self.conn.prepare("SELECT a.id,a.at,a.actor,a.action,a.target,a.detail,a.destructive FROM activity a JOIN assets x ON x.id=a.asset_id WHERE x.project_id=? ORDER BY a.id DESC LIMIT 30")?;
+        let recent = s.query_map([id], |r| Ok(Activity { id: r.get(0)?, at: r.get(1)?, actor: r.get(2)?, action: r.get(3)?, target: r.get(4)?, detail: r.get(5)?, destructive: r.get::<_, i64>(6)? != 0 }))?.collect::<std::result::Result<_, _>>()?;
+        Ok(ProjectContext { assets: self.list_assets(None, Some(id), None)?, systems: self.list_systems(Some(id), None)?, notes, recent, project })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,5 +788,71 @@ mod tests {
         assert!(v.thumbnail("../../etc").is_err());
         let bad = v.import_file(&file(src.path(), "Bad.rbxm", b"garbage"), None, None).unwrap().asset;
         assert!(bad.metadata.get("parse_error").is_some());
+    }
+
+    #[test]
+    fn deps_capture_and_project_memory() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        assert_eq!(luau_requires(r#"local A = require(game.ReplicatedStorage.Shared.ItemConfig)
+            local B = require(script.Parent:WaitForChild("InventoryData")) local C=require(x["Util"]) require(123)"#), vec!["ItemConfig", "InventoryData", "Util"]);
+        let ctrl = v.import_file(&file(src.path(), "Inv.luau", b"local C = require(script.Parent.ItemConfig)\nlocal D = require(script.Parent.Missing)"), None, None).unwrap().asset;
+        let cfg = v.import_file(&file(src.path(), "ItemConfig.luau", b"return {}"), None, None).unwrap().asset;
+        let rep = v.dependency_report(&ctrl.id).unwrap();
+        assert_eq!(rep.suggestions[0].id, cfg.id);
+        assert_eq!(rep.unresolved_requires, vec!["Missing"]);
+        v.add_dependency(&ctrl.id, &cfg.id, "require").unwrap();
+        assert!(v.add_dependency(&ctrl.id, &ctrl.id, "").is_err());
+        let util = v.import_file(&file(src.path(), "Util.luau", b"return 1"), None, None).unwrap().asset;
+        v.add_dependency(&cfg.id, &util.id, "").unwrap();
+        v.set_status(&util.id, "FAILED").unwrap();
+        let rep = v.dependency_report(&ctrl.id).unwrap();
+        assert_eq!((rep.direct.len(), rep.all.len()), (1, 2));
+        assert!(rep.problems.iter().any(|p| p.contains("FAILED")));
+        assert_eq!(v.dependency_report(&cfg.id).unwrap().dependents[0].id, ctrl.id);
+        v.add_dependency(&util.id, &ctrl.id, "").unwrap();
+        assert!(v.dependency_report(&ctrl.id).unwrap().problems.iter().any(|p| p.contains("ciclo")));
+        assert!(v.asset_history(&ctrl.id, 10).unwrap().iter().any(|a| a.action == "asset.import"));
+
+        // captura híbrida
+        let ok = v.capture(&file(src.path(), "Good.luau", b"return 'ok'"), None, true, Some(true), "3 passed", "", "claude").unwrap();
+        assert_eq!(ok.state, "approved");
+        let good = v.get_asset(ok.asset_id.as_ref().unwrap()).unwrap();
+        assert_eq!(good.status, "PARTIALLY VERIFIED");
+        assert_eq!(good.metadata["last_test"]["passed"], true);
+        let bad = v.capture(&file(src.path(), "Bad.luau", b"error()"), None, true, Some(false), "1 failed", "", "claude").unwrap();
+        assert_eq!(v.get_asset(bad.asset_id.as_ref().unwrap()).unwrap().status, "FAILED");
+        let pend = v.capture(&file(src.path(), "New.luau", b"return 2"), None, false, None, "", "", "claude").unwrap();
+        assert_eq!(pend.state, "pending");
+        assert!(pend.asset_id.is_none());
+        assert_eq!(v.list_captures(Some("pending")).unwrap().len(), 1);
+        let ap = v.decide_capture(&pend.id, true, "user").unwrap();
+        assert_eq!(v.get_asset(ap.asset_id.as_ref().unwrap()).unwrap().status, "PENDING");
+        assert!(v.decide_capture(&pend.id, false, "user").is_err());
+        v.set_setting("auto_capture_tested", "false").unwrap();
+        assert_eq!(v.capture(&file(src.path(), "T.luau", b"return 3"), None, true, Some(true), "", "", "claude").unwrap().state, "pending");
+        assert!(v.capture(&file(src.path(), "U.luau", b"return 4"), None, true, None, "", "", "claude").is_err());
+
+        // memoria de proyecto
+        let p = v.create_project("Rift", "").unwrap();
+        v.add_project_note(&p.id, "decision", "Usar ProfileService").unwrap();
+        assert!(v.add_project_note(&p.id, "random", "x").is_err());
+        v.update_asset(&ctrl.id, None, Some(Some(&p.id)), None).unwrap();
+        v.update_project(&p.id, "Rift Tycoon", "desc", "client/server").unwrap();
+        let ctx = v.project_context(&p.id).unwrap();
+        assert_eq!((ctx.project.architecture.as_str(), ctx.notes.len(), ctx.assets.len()), ("client/server", 1, 1));
+        assert!(!ctx.recent.is_empty());
+    }
+
+    #[test]
+    fn animation_import_kind() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        let xml = r#"<roblox version="4"><Item class="KeyframeSequence" referent="A"><Properties><string name="Name">Run</string></Properties><Item class="Keyframe" referent="B"><Properties><float name="Time">0.8</float></Properties></Item></Item></roblox>"#;
+        let a = v.import_file(&file(src.path(), "Run.rbxmx", xml.as_bytes()), None, None).unwrap().asset;
+        assert_eq!(a.kind, "animation");
+        assert_eq!(a.metadata["animations"][0]["keyframes"], 1);
     }
 }

@@ -4,12 +4,14 @@ import { FolderGit2, Plus } from 'lucide-react'
 import { api, type Project } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
 import { Empty, Modal, PageHeader } from '../components/ui'
+import ProjectDetail from './ProjectDetail'
 
 export default function Projects() {
   const [items, setItems] = useState<Project[] | null>(null)
   const [show, setShow] = useState(false)
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
+  const [openId, setOpenId] = useState<string | null>(null)
   const push = useToast((s) => s.push)
   const load = () => api.projects().then(setItems).catch((e) => { setItems([]); toastError(e) })
   useEffect(() => { load() }, [])
@@ -19,13 +21,14 @@ export default function Projects() {
     catch (e) { toastError(e) }
   }
 
+  if (openId) return <ProjectDetail id={openId} onBack={() => { setOpenId(null); load() }} />
   return (
     <div>
       <PageHeader title="Project Memory" subtitle="Cada juego tiene su propia memoria" actions={<button className="btn-primary" onClick={() => setShow(true)}><Plus size={16} />Nuevo proyecto</button>} />
       {items === null ? <div className="grid grid-cols-3 gap-4">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-32" />)}</div>
         : items.length === 0 ? <Empty icon={<FolderGit2 size={22} />} title="Sin proyectos" text="Crea un proyecto por cada juego de Roblox." />
         : <div className="grid grid-cols-3 gap-4">{items.map((p, i) => (
-            <motion.div key={p.id} className="card p-5 transition-colors hover:border-violet/40" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileHover={{ y: -2 }}>
+            <motion.div key={p.id} onClick={() => setOpenId(p.id)} className="card cursor-pointer p-5 transition-colors hover:border-violet/40" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileHover={{ y: -2 }}>
               <FolderGit2 size={18} className="text-accent" />
               <h3 className="mt-3 font-medium text-white">{p.name}</h3>
               <p className="mt-1 line-clamp-2 text-sm text-zinc-400">{p.description || 'Sin descripción'}</p>

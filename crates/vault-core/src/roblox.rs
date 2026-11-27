@@ -35,10 +35,14 @@ pub struct RbxNode { pub name: String, pub class: String, pub children: Vec<RbxN
 pub struct RbxScript { pub path: String, pub class: String, pub source: String }
 
 #[derive(Serialize, Debug, Clone)]
+pub struct RbxAnimation { pub path: String, pub keyframes: usize, pub length: f32, pub looped: bool, pub priority: Option<u32>, pub poses: Vec<String> }
+
+#[derive(Serialize, Debug, Clone)]
 pub struct RbxModel {
     pub tree: Vec<RbxNode>,
     pub parts: Vec<RbxPart>,
     pub scripts: Vec<RbxScript>,
+    pub animations: Vec<RbxAnimation>,
     pub instance_count: usize,
     pub class_counts: BTreeMap<String, usize>,
     pub materials: BTreeMap<String, usize>,
@@ -104,7 +108,7 @@ const PART_CLASSES: &[&str] = &["Part", "WedgePart", "CornerWedgePart", "MeshPar
 const SCRIPT_CLASSES: &[&str] = &["Script", "LocalScript", "ModuleScript"];
 
 fn extract(dom: &WeakDom) -> RbxModel {
-    let mut m = RbxModel { tree: vec![], parts: vec![], scripts: vec![], instance_count: 0, class_counts: BTreeMap::new(), materials: BTreeMap::new(), bounds_min: [f32::MAX; 3], bounds_max: [f32::MIN; 3] };
+    let mut m = RbxModel { tree: vec![], parts: vec![], scripts: vec![], animations: vec![], instance_count: 0, class_counts: BTreeMap::new(), materials: BTreeMap::new(), bounds_min: [f32::MAX; 3], bounds_max: [f32::MIN; 3] };
     fn walk(dom: &WeakDom, i: &Instance, path: &str, m: &mut RbxModel) -> RbxNode {
         m.instance_count += 1;
         let class = i.class.as_str().to_string();
@@ -136,6 +140,19 @@ fn extract(dom: &WeakDom) -> RbxModel {
         if SCRIPT_CLASSES.contains(&class.as_str()) {
             m.scripts.push(RbxScript { path: path.clone(), class: class.clone(), source: text(i, "Source").unwrap_or_default() });
         }
+        if class == "KeyframeSequence" {
+            let mut anim = RbxAnimation { path: path.clone(), keyframes: 0, length: 0.0, looped: matches!(i.properties.get(&"Loop".into()), Some(Variant::Bool(true))), priority: enum_val(i, "Priority"), poses: vec![] };
+            for kr in i.children() {
+                let Some(k) = dom.get_by_ref(*kr) else { continue };
+                if k.class.as_str() != "Keyframe" { continue; }
+                anim.keyframes += 1;
+                anim.length = anim.length.max(f32p(k, "Time").unwrap_or(0.0));
+                for d in dom.descendants_of(*kr) {
+                    if d.class.as_str() == "Pose" && d.name != "HumanoidRootPart" && !anim.poses.contains(&d.name) { anim.poses.push(d.name.clone()); }
+                }
+            }
+            m.animations.push(anim);
+        }
         let children = i.children().iter().filter_map(|r| dom.get_by_ref(*r)).map(|c| walk(dom, c, &path, m)).collect();
         RbxNode { name: i.name.clone(), class, children }
     }
@@ -155,6 +172,7 @@ pub fn summary(m: &RbxModel) -> serde_json::Value {
         "materials": m.materials.keys().collect::<Vec<_>>(),
         "scripts": m.scripts.iter().map(|s| format!("{} ({})", s.path, s.class)).collect::<Vec<_>>(),
         "mesh_parts_without_geometry": m.parts.iter().filter(|p| p.shape == "mesh").count(),
+        "animations": m.animations.iter().map(|a| serde_json::json!({ "path": a.path, "keyframes": a.keyframes, "length_s": a.length, "looped": a.looped, "poses": a.poses })).collect::<Vec<_>>(),
     })
 }
 
@@ -202,5 +220,20 @@ mod tests {
         let mb = parse(&buf, "rbxm").unwrap();
         assert_eq!(mb.parts.len(), 2);
         assert_eq!(mb.scripts[0].source, "print(\"on\")");
+    }
+
+    #[test]
+    fn parses_keyframe_sequence() {
+        let xml = r#"<roblox version="4"><Item class="KeyframeSequence" referent="A"><Properties><string name="Name">Wave</string><bool name="Loop">true</bool></Properties>
+          <Item class="Keyframe" referent="B"><Properties><string name="Name">K0</string><float name="Time">0</float></Properties>
+            <Item class="Pose" referent="C"><Properties><string name="Name">HumanoidRootPart</string></Properties>
+              <Item class="Pose" referent="D"><Properties><string name="Name">RightUpperArm</string></Properties></Item></Item></Item>
+          <Item class="Keyframe" referent="E"><Properties><string name="Name">K1</string><float name="Time">1.25</float></Properties></Item>
+        </Item></roblox>"#;
+        let m = parse(xml.as_bytes(), "rbxmx").unwrap();
+        assert_eq!(m.animations.len(), 1);
+        let a = &m.animations[0];
+        assert_eq!((a.keyframes, a.length, a.looped), (2, 1.25, true));
+        assert_eq!(a.poses, vec!["RightUpperArm".to_string()]);
     }
 }

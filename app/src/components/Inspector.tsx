@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Copy, Download, GitCompare, Plus, Save, Trash2, X } from 'lucide-react'
-import { api, formatBytes, type Asset, type Project, type Version } from '../lib/api'
+import { api, formatBytes, type Activity, type Asset, type Project, type Version } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
 import { StatusBadge } from './ui'
 import { CodeView, DiffView } from './CodeView'
@@ -34,9 +34,11 @@ function Body({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset; 
   const [versions, setVersions] = useState<Version[]>([])
   const [shown, setShown] = useState(asset.version)
   const [text, setText] = useState<string | null>(null)
+  const [hist, setHist] = useState<Activity[]>([])
   const [cmp, setCmp] = useState<{ a: number; b: number; ta: string; tb: string } | null>(null)
 
   useEffect(() => { api.versions(asset.id).then(setVersions).catch(toastError) }, [asset.id, asset.version])
+  useEffect(() => { api.history(asset.id).then(setHist).catch(() => {}) }, [asset.id, asset.updated_at])
   useEffect(() => { api.text(asset.id, shown).then(setText).catch(toastError) }, [asset.id, shown])
 
   async function save() {
@@ -110,6 +112,10 @@ function Body({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset; 
         {text != null && <section><div className="mb-2 flex justify-between"><h3 className="text-sm font-medium text-zinc-300">Contenido v{shown}</h3>
           <button className="text-xs text-accent hover:underline" onClick={() => navigator.clipboard.writeText(text).then(() => push('ok', 'Código copiado'))}><Copy size={12} className="inline" /> Copiar</button></div>
           <CodeView code={text} /></section>}
+        <section><h3 className="mb-2 text-sm font-medium text-zinc-300">Historial</h3>
+          <div className="space-y-1">{hist.map((h) => <div key={h.id} className="flex gap-3 text-xs"><span className="w-36 shrink-0 text-zinc-500">{new Date(h.at).toLocaleString()}</span>
+            <span className={h.destructive ? 'text-red-400' : 'text-accent'}>{h.action}</span><span className="truncate text-zinc-400">{h.detail}</span><span className="ml-auto text-zinc-600">{h.actor}</span></div>)}
+            {hist.length === 0 && <p className="text-xs text-zinc-500">Sin historial.</p>}</div></section>
       </div>
     </>
   )

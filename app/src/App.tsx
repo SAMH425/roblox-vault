@@ -5,9 +5,11 @@ import Dashboard from './pages/Dashboard'
 import Library from './pages/Library'
 import Projects from './pages/Projects'
 import Systems from './pages/Systems'
+import Dependencies from './pages/Dependencies'
+import Animations from './pages/Animations'
 import { UpdateBanner, useUpdater } from './components/Updater'
 import { Activity, Settings } from './pages/ActivitySettings'
-import { PageHeader, PhaseNotice, Toasts } from './components/ui'
+import { Toasts } from './components/ui'
 import { isTauri } from './lib/api'
 
 const NAV = [
@@ -32,8 +34,8 @@ function render(p: Page, u: ReturnType<typeof useUpdater>) {
     case 'activity': return <Activity />
     case 'settings': return <Settings updater={u} />
     case 'systems': return <Systems />
-    case 'anim': return <><PageHeader title="Animations" /><PhaseNotice phase={4} what="Animaciones (KeyframeSequence) con vista previa en el visor 3D." /></>
-    case 'deps': return <><PageHeader title="Dependencies" /><PhaseNotice phase={4} what="Grafo de dependencias entre recursos y comprobación al recuperar." /></>
+    case 'anim': return <Animations />
+    case 'deps': return <Dependencies />
   }
 }
 
@@ -56,7 +58,7 @@ export default function App() {
           ))}
         </nav>
         <div className="mt-auto"><UpdateBanner u={u} /></div>
-        <div className="px-2 text-[11px] text-zinc-500">v{u.version || '0.1.0'} · Fase 3{!isTauri() && <div className="mt-1 text-amber-300">Modo navegador: sin bóveda</div>}</div>
+        <div className="px-2 text-[11px] text-zinc-500">v{u.version || '0.1.0'} · Fase 4{!isTauri() && <div className="mt-1 text-amber-300">Modo navegador: sin bóveda</div>}</div>
       </aside>
       <main className="flex-1 overflow-y-auto">
         <AnimatePresence mode="wait">
