@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Copy, Download, GitCompare, Plus, Save, Trash2, X } from 'lucide-react'
+import { Copy, Download, GitCompare, Plus, Save, Trash, Trash2, X } from 'lucide-react'
 import { api, formatBytes, type Activity, type Asset, type Project, type Version } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
 import { StatusBadge } from './ui'
@@ -10,7 +10,7 @@ const Viewer3D = lazy(() => import('./Viewer3D').then((m) => ({ default: m.Viewe
 const VIEWABLE = ['glb', 'gltf', 'obj', 'fbx', 'rbxm', 'rbxmx']
 
 /** Panel lateral: metadatos editables, versiones, código y comparación. */
-export function Inspector({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset | null; projects: Project[]; onClose: () => void; onChanged: () => void; onThumb?: () => void }) {
+export function Inspector({ asset, projects, onClose, onChanged, onThumb, onTrash }: { asset: Asset | null; projects: Project[]; onClose: () => void; onChanged: () => void; onThumb?: () => void; onTrash?: () => void }) {
   return (
     <AnimatePresence>
       {asset && (
@@ -18,7 +18,7 @@ export function Inspector({ asset, projects, onClose, onChanged, onThumb }: { as
           <motion.div className="fixed inset-0 z-30 bg-black/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
           <motion.aside key={asset.id} className="fixed top-0 right-0 z-30 flex h-full w-[640px] flex-col border-l border-white/[0.06] bg-surface shadow-2xl"
             initial={{ x: 660 }} animate={{ x: 0 }} exit={{ x: 660 }} transition={{ type: 'spring', damping: 30, stiffness: 300 }}>
-            <Body asset={asset} projects={projects} onClose={onClose} onChanged={onChanged} onThumb={onThumb} />
+            <Body asset={asset} projects={projects} onClose={onClose} onChanged={onChanged} onThumb={onThumb} onTrash={onTrash} />
           </motion.aside>
         </>
       )}
@@ -26,7 +26,7 @@ export function Inspector({ asset, projects, onClose, onChanged, onThumb }: { as
   )
 }
 
-function Body({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset; projects: Project[]; onClose: () => void; onChanged: () => void; onThumb?: () => void }) {
+function Body({ asset, projects, onClose, onChanged, onThumb, onTrash }: { asset: Asset; projects: Project[]; onClose: () => void; onChanged: () => void; onThumb?: () => void; onTrash?: () => void }) {
   const push = useToast((s) => s.push)
   const [name, setName] = useState(asset.name)
   const [projectId, setProjectId] = useState(asset.project_id ?? '')
@@ -71,7 +71,8 @@ function Body({ asset, projects, onClose, onChanged, onThumb }: { asset: Asset; 
       <div className="flex items-start justify-between border-b border-white/[0.06] p-5">
         <div><div className="flex items-center gap-2"><h2 className="text-lg font-semibold text-white">{asset.name}</h2><StatusBadge s={asset.status} /></div>
           <p className="mt-1 text-xs text-zinc-500">{asset.original_name} · {asset.format.toUpperCase()} · {formatBytes(asset.size)} · v{asset.version}</p></div>
-        <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={18} /></button>
+        <div className="flex items-center gap-3">{onTrash && <button title="Mover a la papelera" onClick={onTrash} className="text-zinc-500 hover:text-red-400"><Trash size={17} /></button>}
+          <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={18} /></button></div>
       </div>
       <div className="flex-1 space-y-6 overflow-y-auto p-5">
         {VIEWABLE.includes(asset.format) && <Suspense fallback={<div className="skeleton h-[380px]" />}><Viewer3D asset={asset} version={shown} onThumb={onThumb}

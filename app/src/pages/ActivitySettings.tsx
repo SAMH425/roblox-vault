@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Blocks, Copy, DatabaseBackup, PlugZap, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Blocks, Trash2, Undo2, Copy, DatabaseBackup, PlugZap, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { useUpdater } from '../components/Updater'
 import { api, type Activity as Act, type IntegrityReport } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
-import { PageHeader } from '../components/ui'
+import { Modal, PageHeader } from '../components/ui'
+import type { Asset } from '../lib/api'
 import { Captures } from './Captures'
 
 export function Activity() {
@@ -25,6 +26,36 @@ export function Activity() {
               <span className="text-xs text-zinc-500">{a.actor}</span>
             </div>))}
       </div>}
+    </div>
+  )
+}
+
+function TrashPanel() {
+  const [items, setItems] = useState<{ asset: Asset; deleted_at: string }[] | null>(null)
+  const [confirm, setConfirm] = useState(false)
+  const push = useToast((s) => s.push)
+  const load = () => api.listTrash().then(setItems).catch(() => setItems([]))
+  useEffect(() => { load() }, [])
+  async function restoreAll(ids: string[]) { try { await api.restoreTrash(ids); push('ok', `${ids.length} recuperado(s)`); load() } catch (e) { toastError(e) } }
+  async function purge() {
+    try { const r = await api.emptyTrash(); push('ok', `Borrados ${r.removed} recurso(s) y ${r.files} archivo(s). Copia previa: ${r.backup}`); setConfirm(false); load() } catch (e) { toastError(e) }
+  }
+  return (
+    <div className="card mb-4 p-5">
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-2 font-medium text-white"><Trash2 size={16} className="text-accent" />Papelera ({items?.length ?? 0})</h3>
+        {!!items?.length && <div className="flex gap-2"><button className="btn-ghost py-1.5" onClick={() => restoreAll(items.map((i) => i.asset.id))}><Undo2 size={14} />Recuperar todo</button>
+          <button className="btn-ghost py-1.5 text-red-300" onClick={() => setConfirm(true)}><Trash2 size={14} />Vaciar papelera</button></div>}
+      </div>
+      <div className="mt-3 max-h-64 space-y-1 overflow-y-auto">{items?.slice(0, 300).map((t) => (
+        <div key={t.asset.id} className="flex items-center gap-3 text-sm"><span className="flex-1 truncate text-zinc-300">{t.asset.name} <span className="text-xs text-zinc-500 uppercase">{t.asset.format}</span></span>
+          <span className="text-xs text-zinc-500">{new Date(t.deleted_at).toLocaleString()}</span>
+          <button className="text-accent hover:underline text-xs" onClick={() => restoreAll([t.asset.id])}>Recuperar</button></div>))}
+        {items?.length === 0 && <p className="text-sm text-zinc-500">Vacía.</p>}</div>
+      <Modal open={confirm} onClose={() => setConfirm(false)} title="Vaciar papelera">
+        <p className="text-sm text-zinc-300">Se borrarán definitivamente {items?.length} recurso(s) con todas sus versiones. Antes se hace una copia de seguridad de la base de datos. Los archivos que otro recurso siga usando no se tocan. Esto no se puede deshacer.</p>
+        <div className="mt-4 flex justify-end gap-2"><button className="btn-ghost" onClick={() => setConfirm(false)}>Cancelar</button><button className="btn-primary bg-red-500 hover:bg-red-500/85" onClick={purge}>Borrar definitivamente</button></div>
+      </Modal>
     </div>
   )
 }
@@ -91,6 +122,7 @@ export function Settings({ updater }: { updater: ReturnType<typeof useUpdater> }
           <p className="mt-1 text-sm text-zinc-400">Si está activo, lo que Claude registre con pruebas superadas entra directo como PARTIALLY VERIFIED. Lo no probado siempre pide tu aprobación; lo que falla se guarda como FAILED.</p></div>
         <button onClick={toggleAuto} className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${auto ? 'bg-violet' : 'bg-panel'}`}><span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${auto ? 'left-[22px]' : 'left-0.5'}`} /></button>
       </div>
+      <TrashPanel />
       <div className="grid grid-cols-2 gap-4">
         <div className="card p-5">
           <h3 className="font-medium text-white">Integridad de archivos</h3>

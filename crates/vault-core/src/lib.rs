@@ -24,7 +24,7 @@ pub enum VaultError {
 }
 pub type Result<T> = std::result::Result<T, VaultError>;
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/001_init.sql")), (2, include_str!("../migrations/002_library.sql")), (3, include_str!("../migrations/003_memory.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/001_init.sql")), (2, include_str!("../migrations/002_library.sql")), (3, include_str!("../migrations/003_memory.sql")), (4, include_str!("../migrations/004_trash.sql"))];
 pub const STATUSES: &[&str] = &["VERIFIED", "PARTIALLY VERIFIED", "PENDING", "FAILED", "DEPRECATED"];
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -167,6 +167,10 @@ impl Vault {
         let duplicate_of: Option<String> = self.conn.query_row(
             "SELECT asset_id FROM asset_versions WHERE sha256=? LIMIT 1", [&hash], |r| r.get(0)).optional()?;
         if let (Some(dup), None) = (&duplicate_of, update_asset_id) {
+            // si el duplicado estaba en la papelera, volver a importarlo lo recupera
+            if self.conn.execute("UPDATE assets SET deleted_at=NULL WHERE id=? AND deleted_at IS NOT NULL", [dup])? > 0 {
+                self.log_asset("app", "asset.untrash", Some(dup), &original, "reimportado", false)?;
+            }
             return Ok(ImportResult { asset: self.get_asset(dup)?, duplicate_of: Some(dup.clone()), new_version: false });
         }
         self.store_blob(src)?;
@@ -224,7 +228,7 @@ impl Vault {
 
     pub fn search_assets(&self, kind: Option<&str>, project_id: Option<&str>, query: Option<&str>, in_content: bool) -> Result<Vec<Asset>> {
         let q = query.map(|s| format!("%{}%", s.to_lowercase()));
-        let mut s = self.conn.prepare(&format!("{} WHERE (?1 IS NULL OR a.kind=?1) AND (?2 IS NULL OR a.project_id=?2) AND (?3 IS NULL OR lower(a.name) LIKE ?3 OR lower(a.original_name) LIKE ?3 OR (?4 AND EXISTS (SELECT 1 FROM blob_text t WHERE t.sha256=v.sha256 AND lower(t.content) LIKE ?3))) ORDER BY a.updated_at DESC", Self::ASSET_SQL))?;
+        let mut s = self.conn.prepare(&format!("{} WHERE a.deleted_at IS NULL AND (?1 IS NULL OR a.kind=?1) AND (?2 IS NULL OR a.project_id=?2) AND (?3 IS NULL OR lower(a.name) LIKE ?3 OR lower(a.original_name) LIKE ?3 OR (?4 AND EXISTS (SELECT 1 FROM blob_text t WHERE t.sha256=v.sha256 AND lower(t.content) LIKE ?3))) ORDER BY a.updated_at DESC", Self::ASSET_SQL))?;
         let rows = s.query_map(params![kind, project_id, q, in_content], Self::row_asset)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
@@ -289,9 +293,9 @@ impl Vault {
         let since = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
         Ok(Stats {
             projects: one("SELECT COUNT(*) FROM projects")?,
-            assets: one("SELECT COUNT(*) FROM assets")?,
-            by_kind: pairs("SELECT kind, COUNT(*) FROM assets GROUP BY kind ORDER BY 2 DESC")?,
-            by_status: pairs("SELECT status, COUNT(*) FROM assets GROUP BY status ORDER BY 2 DESC")?,
+            assets: one("SELECT COUNT(*) FROM assets WHERE deleted_at IS NULL")?,
+            by_kind: pairs("SELECT kind, COUNT(*) FROM assets WHERE deleted_at IS NULL GROUP BY kind ORDER BY 2 DESC")?,
+            by_status: pairs("SELECT status, COUNT(*) FROM assets WHERE deleted_at IS NULL GROUP BY status ORDER BY 2 DESC")?,
             storage_bytes: one("SELECT COALESCE(SUM(size),0) FROM blobs")?,
             activity_24h: self.conn.query_row("SELECT COUNT(*) FROM activity WHERE at>=?", [since], |r| r.get(0))?,
         })
@@ -876,6 +880,73 @@ impl Vault {
     }
 }
 
+
+#[derive(Serialize, Debug)]
+pub struct TrashItem { pub asset: Asset, pub deleted_at: String }
+
+impl Vault {
+    /// Mueve recursos a la papelera (reversible). Avisa si otros dependen de ellos.
+    pub fn trash_assets(&self, ids: &[String]) -> Result<(usize, Vec<String>)> {
+        let mut warnings = vec![];
+        let tx = self.conn.unchecked_transaction()?;
+        let mut n = 0;
+        for id in ids {
+            let a = self.get_asset(id)?;
+            let users: i64 = self.conn.query_row("SELECT COUNT(*) FROM asset_deps d JOIN assets x ON x.id=d.asset_id WHERE d.depends_on=? AND x.deleted_at IS NULL", [id], |r| r.get(0))?;
+            if users > 0 { warnings.push(format!("{}: {} recurso(s) dependen de él", a.name, users)); }
+            n += self.conn.execute("UPDATE assets SET deleted_at=? WHERE id=? AND deleted_at IS NULL", params![now(), id])?;
+            self.log_asset("app", "asset.trash", Some(id), &a.name, "", true)?;
+        }
+        tx.commit()?;
+        Ok((n, warnings))
+    }
+
+    pub fn restore_from_trash(&self, ids: &[String]) -> Result<usize> {
+        let mut n = 0;
+        for id in ids {
+            n += self.conn.execute("UPDATE assets SET deleted_at=NULL WHERE id=?", [id])?;
+            self.log_asset("app", "asset.untrash", Some(id), id, "", false)?;
+        }
+        Ok(n)
+    }
+
+    pub fn list_trash(&self) -> Result<Vec<TrashItem>> {
+        let mut s = self.conn.prepare("SELECT id, deleted_at FROM assets WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")?;
+        let rows: Vec<(String, String)> = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+        rows.into_iter().map(|(id, at)| Ok(TrashItem { asset: self.get_asset(&id)?, deleted_at: at })).collect()
+    }
+
+    /// Borra definitivamente lo que está en la papelera. Antes hace copia de seguridad de la base de datos.
+    /// Los archivos originales se eliminan solo si ningún otro recurso los usa.
+    pub fn empty_trash(&self, ids: Option<&[String]>) -> Result<(usize, usize, PathBuf)> {
+        let backup = self.backup()?;
+        let targets: Vec<String> = match ids { Some(i) => i.to_vec(), None => self.list_trash()?.into_iter().map(|t| t.asset.id).collect() };
+        let (mut removed, mut files) = (0, 0);
+        for id in &targets {
+            let deleted: Option<String> = self.conn.query_row("SELECT deleted_at FROM assets WHERE id=?", [id], |r| r.get(0)).optional()?.flatten();
+            if deleted.is_none() { continue; } // solo lo que ya está en la papelera
+            let name: String = self.conn.query_row("SELECT name FROM assets WHERE id=?", [id], |r| r.get(0))?;
+            let mut st = self.conn.prepare("SELECT DISTINCT sha256 FROM asset_versions WHERE asset_id=?")?;
+            let hashes: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+            self.conn.execute("DELETE FROM assets WHERE id=?", [id])?; // versiones, dependencias y miembros caen por CASCADE
+            for h in hashes {
+                let still: i64 = self.conn.query_row("SELECT COUNT(*) FROM asset_versions WHERE sha256=?", [&h], |r| r.get(0))?;
+                if still == 0 {
+                    let rel: Option<String> = self.conn.query_row("SELECT rel_path FROM blobs WHERE sha256=?", [&h], |r| r.get(0)).optional()?;
+                    self.conn.execute("DELETE FROM blob_text WHERE sha256=?", [&h])?;
+                    self.conn.execute("DELETE FROM blobs WHERE sha256=?", [&h])?;
+                    if let Some(rel) = rel { let p = self.root.join(safe_relative(&rel)?); if p.exists() { fs::remove_file(p)?; files += 1; } }
+                }
+            }
+            let thumb = self.root.join("thumbs").join(format!("{id}.png"));
+            if thumb.exists() { let _ = fs::remove_file(thumb); }
+            self.log("app", "asset.purge", &name, id, true)?;
+            removed += 1;
+        }
+        Ok((removed, files, backup))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1122,5 +1193,39 @@ mod tests {
         assert_eq!(a[0].asset.metadata["icon"], "Coin");
         assert!(a[0].asset.metadata["license"].as_str().unwrap().contains("commercial"));
         assert_eq!(v.import_folder(src.path(), "Naro", None).unwrap().imported, 0, "repetir no duplica");
+    }
+
+    #[test]
+    fn trash_restore_and_purge() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        let a = v.import_file(&file(src.path(), "A.png", b"\x89PNGa"), None, None).unwrap().asset;
+        let b = v.import_file(&file(src.path(), "B.luau", b"return 1"), None, None).unwrap().asset;
+        let c = v.import_file(&file(src.path(), "C.luau", b"return require(script.Parent.B)"), None, None).unwrap().asset;
+        v.add_dependency(&c.id, &b.id, "").unwrap();
+        let (n, warn) = v.trash_assets(&[a.id.clone(), b.id.clone()]).unwrap();
+        assert_eq!(n, 2);
+        assert!(warn[0].contains("dependen"), "avisa que C usa B");
+        assert_eq!(v.list_assets(None, None, None).unwrap().len(), 1, "ocultos de la biblioteca");
+        assert_eq!(v.stats().unwrap().assets, 1);
+        assert_eq!(v.list_trash().unwrap().len(), 2);
+        v.restore_from_trash(&[b.id.clone()]).unwrap();
+        assert_eq!(v.list_assets(None, None, None).unwrap().len(), 2);
+        // purgar solo A: borra su archivo; no toca C ni B
+        let blob = root.path().join("blobs").join(&a.sha256[..2]).join(&a.sha256);
+        assert!(blob.exists());
+        assert_eq!(v.empty_trash(Some(&[c.id.clone()])).unwrap().0, 0, "no purga lo que no está en la papelera");
+        let (removed, files, backup) = v.empty_trash(None).unwrap();
+        assert_eq!((removed, files), (1, 1));
+        assert!(backup.exists() && !blob.exists());
+        assert!(v.get_asset(&a.id).is_err());
+        // un archivo compartido por dos recursos no se borra mientras uno lo use
+        let d1 = v.import_file(&file(src.path(), "D.luau", b"return 9"), None, None).unwrap().asset;
+        fs::write(src.path().join("D.luau"), b"return 10").unwrap();
+        v.import_file(&src.path().join("D.luau"), None, Some(&d1.id)).unwrap();
+        v.trash_assets(&[d1.id.clone()]).unwrap();
+        v.empty_trash(None).unwrap();
+        assert_eq!(v.verify_integrity().unwrap().missing.len(), 0);
     }
 }

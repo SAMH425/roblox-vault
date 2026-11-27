@@ -95,6 +95,12 @@
 - Packs del usuario: FreeNaroStarterIconPack y Free Icon Pack v3.1 (licencia: uso comercial permitido, no revender).
 - Limitación: para usarlos en un juego hay que subirlos a Roblox (rbxassetid).
 
+## Borrar recursos ✅
+- Papelera reversible: "Seleccionar" en cualquier biblioteca (varios a la vez o todos los visibles) o el icono de
+  papelera en el inspector. Avisa si otros recursos dependen de lo que borras.
+- Settings → Papelera: recuperar uno/todos o vaciar. Vaciar hace copia de seguridad antes y solo borra archivos que
+  ningún otro recurso usa. Reimportar un archivo que está en la papelera lo recupera.
+
 ## Pendiente
 Fase 7: pulido + instalador.
 

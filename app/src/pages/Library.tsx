@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Download, FileUp, FolderInput, Search, Boxes, LayoutGrid, List } from 'lucide-react'
+import { CheckSquare, Download, FileUp, FolderInput, Search, Boxes, LayoutGrid, List, Square, Trash2 } from 'lucide-react'
 import { api, formatBytes, STATUSES, type Asset, type Project, type Status } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
-import { Empty, PageHeader, StatusBadge } from '../components/ui'
+import { Empty, Modal, PageHeader, StatusBadge } from '../components/ui'
 import { Inspector } from '../components/Inspector'
 import { Thumb } from '../components/Thumb'
 
@@ -21,6 +21,18 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
   const [view, setView] = useState<'list' | 'grid'>(kind === 'model' || kind === 'texture' ? 'grid' : 'list')
   const [sel, setSel] = useState<Asset | null>(null)
   const [thumbBump, setThumbBump] = useState(0)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [selecting, setSelecting] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false)
+  const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  async function trashPicked() {
+    try {
+      const r = await api.trash([...picked])
+      push('ok', `${r.moved} recurso(s) movidos a la papelera (Settings → Papelera para recuperarlos)`)
+      r.warnings.forEach((w) => push('info', w))
+      setPicked(new Set()); setSelecting(false); setConfirmDel(false); setSel(null); load()
+    } catch (e) { toastError(e) }
+  }
   const push = useToast((s) => s.push)
 
   const load = useCallback(() => {
@@ -83,16 +95,29 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
         <select className="input" value={status} onChange={(e) => setStatusF(e.target.value)}><option value="">Todos los estados</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select>
         <select className="input" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
           <option value="relevance">Relevancia</option><option value="recent">Recientes</option><option value="name">Nombre</option><option value="size">Tamaño</option><option value="status">Estado</option></select>
+        <button className={`btn-ghost ${selecting ? 'ring-1 ring-violet/50' : ''}`} onClick={() => { setSelecting(!selecting); setPicked(new Set()) }}><CheckSquare size={15} />Seleccionar</button>
         <div className="flex rounded-xl border border-white/[0.08] p-0.5">
           {(['list', 'grid'] as const).map((v) => <button key={v} onClick={() => setView(v)} className={`rounded-lg px-2.5 ${view === v ? 'bg-violet/20 text-white' : 'text-zinc-500'}`}>{v === 'list' ? <List size={15} /> : <LayoutGrid size={15} />}</button>)}
         </div>
       </div>
 
+      {selecting && (
+        <div className="mb-4 flex items-center gap-3 rounded-xl bg-panel/60 px-4 py-2 text-sm">
+          <span className="text-white">{picked.size} seleccionado(s)</span>
+          <button className="text-accent hover:underline" onClick={() => setPicked(new Set(shown.slice(0, 600).map((a) => a.id)))}>Todos los visibles ({Math.min(shown.length, 600)})</button>
+          <button className="text-zinc-400 hover:underline" onClick={() => setPicked(new Set())}>Ninguno</button>
+          <button className="btn-ghost ml-auto py-1.5 text-red-300" disabled={picked.size === 0} onClick={() => setConfirmDel(true)}><Trash2 size={14} />Mover a la papelera</button>
+        </div>)}
+      <Modal open={confirmDel} onClose={() => setConfirmDel(false)} title="Mover a la papelera">
+        <p className="text-sm text-zinc-300">Se ocultarán {picked.size} recurso(s) de la biblioteca. Puedes recuperarlos desde Settings → Papelera; solo se borran de verdad si vacías la papelera.</p>
+        <div className="mt-4 flex justify-end gap-2"><button className="btn-ghost" onClick={() => setConfirmDel(false)}>Cancelar</button><button className="btn-primary bg-red-500 hover:bg-red-500/85" onClick={trashPicked}>Mover {picked.size}</button></div>
+      </Modal>
       {items === null ? <div className="space-y-2">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-14" />)}</div>
         : shown.length === 0 ? <Empty icon={<Boxes size={22} />} title="Nada por aquí" text="Importa archivos: se copian a la bóveda con SHA-256 y el original no se toca." action={<button className="btn-ghost" onClick={importFiles}><FileUp size={16} />Importar</button>} />
         : view === 'grid' ? (
           <div className={`grid gap-4 ${kind === 'texture' ? 'grid-cols-6' : 'grid-cols-4'}`}>{shown.slice(0, 600).map((a, i) => (
-            <motion.button key={a.id} onClick={() => setSel(a)} className="card p-4 text-left transition-colors hover:border-violet/40" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.02 }} whileHover={{ y: -2 }}>
+            <motion.button key={a.id} onClick={() => selecting ? toggle(a.id) : setSel(a)} className={`card relative p-4 text-left transition-colors hover:border-violet/40 ${picked.has(a.id) ? 'border-violet/70 bg-violet/10' : ''}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.02 }} whileHover={{ y: -2 }}>
+              {selecting && <span className="absolute top-2 left-2 z-10 text-accent">{picked.has(a.id) ? <CheckSquare size={16} /> : <Square size={16} />}</span>}
               <div className="mb-3 grid h-32 place-items-center overflow-hidden rounded-xl bg-panel/60"><Thumb asset={a} bump={thumbBump} /></div>
               <div className="truncate font-medium text-white">{a.name}</div>{typeof a.metadata.category === 'string' && <div className="truncate text-[11px] text-accent">{String(a.metadata.pack ?? '')} · {a.metadata.category}{a.metadata.variant ? ` · ${a.metadata.variant}` : ''}</div>}
               <div className="mt-1 flex items-center justify-between text-xs text-zinc-500"><span>v{a.version} · {formatBytes(a.size)}</span><StatusBadge s={a.status} /></div>
@@ -104,8 +129,8 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
                 <th className="px-4 py-3">Nombre</th><th>Formato</th><th>Proyecto</th><th>Versión</th><th>Tamaño</th><th>Estado</th><th /></tr></thead>
               <tbody>
                 {shown.map((a, i) => (
-                  <motion.tr key={a.id} onClick={() => setSel(a)} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.015 }} className="cursor-pointer border-b border-white/[0.04] hover:bg-panel/40">
-                    <td className="px-4 py-3"><div className="font-medium text-white">{a.name}</div><div className="font-mono text-[11px] text-zinc-500" title={a.sha256}>{a.sha256.slice(0, 16)}…</div></td>
+                  <motion.tr key={a.id} onClick={() => selecting ? toggle(a.id) : setSel(a)} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.015 }} className="cursor-pointer border-b border-white/[0.04] hover:bg-panel/40">
+                    <td className="px-4 py-3"><div className="flex items-center gap-2 font-medium text-white">{selecting && (picked.has(a.id) ? <CheckSquare size={15} className="text-accent" /> : <Square size={15} className="text-zinc-500" />)}{a.name}</div><div className="font-mono text-[11px] text-zinc-500" title={a.sha256}>{a.sha256.slice(0, 16)}…</div></td>
                     <td className="text-zinc-400"><span className="uppercase">{a.format}</span>{typeof a.metadata.script_type === 'string' && <span className="ml-2 text-xs text-accent">{a.metadata.script_type}</span>}</td>
                     <td className="text-zinc-400">{a.project_name ?? 'Global'}</td>
                     <td className="text-zinc-400">v{a.version}</td>
@@ -122,7 +147,7 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
             </table>
           </div>
         )}
-      <Inspector asset={sel} projects={projects} onClose={() => setSel(null)} onChanged={changed} onThumb={() => setThumbBump((b) => b + 1)} />
+      <Inspector asset={sel} projects={projects} onClose={() => setSel(null)} onChanged={changed} onTrash={() => { setPicked(new Set([sel!.id])); setConfirmDel(true) }} onThumb={() => setThumbBump((b) => b + 1)} />
     </div>
   )
 }
