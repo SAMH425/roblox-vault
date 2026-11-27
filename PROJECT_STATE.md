@@ -56,8 +56,22 @@
 - Búsqueda: exacta por nombre y por contenido. La búsqueda semántica local opcional queda pendiente (Fase 7).
 - Pruebas: 10 Rust (núcleo) + 1 prueba de punta a punta que lanza el binario y habla MCP + 5 Vitest.
 
+## Fase 6 — ROBLOX STUDIO ✅ (pendiente de prueba en tu Studio)
+- `plugin/RobloxVault.plugin.luau`: pestaña ROBLOX VAULT con panel acoplable. Conectar, vincular el juego por
+  PlaceId a un proyecto, buscar (todo o solo el proyecto), insertar modelos/scripts (con confirmación),
+  enviar la selección (modelos vía SerializationService → .rbxm; scripts con su Source y clase), nueva versión
+  automática si la instancia ya vino de la bóveda (atributo VaultAssetId), registrar cambios, importar archivo
+  (.rbxm con StudioService:PromptImportFileAsync) como alternativa si no hay conexión.
+- Seguridad: solo 127.0.0.1 + token por instalación; nunca ejecuta código: scripts no VERIFIED se insertan
+  desactivados, scripts con errores de sintaxis no se insertan; todo dentro de ChangeHistoryService (deshacer).
+- APIs verificadas en la documentación oficial: SerializationService, EncodingService.Base64Encode/Decode,
+  HttpService a localhost desde plugins.
+- `crates/vault-bridge`: servidor HTTP local en la app (puerto 47515). Convierte .rbxmx → .rbxm para Studio.
+  Settings → "Instalar plugin en Studio" lo escribe en %LOCALAPPDATA%\Roblox\Plugins con el token.
+- Pruebas: 3 Rust (rutas + servidor HTTP real + el plugin se valida como Luau con full-moon).
+
 ## Pendiente
-- Fase 6: plugin Studio. Fase 7: pulido + instalador.
+Fase 7: pulido + instalador.
 
 ## Limitaciones conocidas
 - La app se compiló y probó en Linux; falta la primera ejecución en Windows.

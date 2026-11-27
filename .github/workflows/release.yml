@@ -17,12 +17,13 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-        with: { workspaces: "app/src-tauri -> target\ncrates/vault-core -> target\ncrates/vault-mcp -> target" }
+        with: { workspaces: "app/src-tauri -> target\ncrates/vault-core -> target\ncrates/vault-mcp -> target\ncrates/vault-bridge -> target" }
 
       - name: Pruebas del núcleo y del servidor MCP
         run: |
           cargo test --manifest-path crates/vault-core/Cargo.toml
           cargo test --manifest-path crates/vault-mcp/Cargo.toml
+          cargo test --manifest-path crates/vault-bridge/Cargo.toml
 
       - name: Compilar servidor MCP (se instala junto a la app)
         shell: pwsh

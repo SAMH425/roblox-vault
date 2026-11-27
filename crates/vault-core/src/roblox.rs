@@ -162,6 +162,15 @@ fn extract(dom: &WeakDom) -> RbxModel {
     m
 }
 
+/// Convierte RBXMX (o RBXM) a RBXM binario, el formato que acepta SerializationService en Studio.
+pub fn to_rbxm(bytes: &[u8], format: &str) -> Result<Vec<u8>, String> {
+    if format == "rbxm" { return Ok(bytes.to_vec()); }
+    let dom = rbx_xml::from_reader_default(bytes).map_err(|e| format!("RBXMX no válido: {e}"))?;
+    let mut out = vec![];
+    rbx_binary::to_writer(&mut out, &dom, dom.root().children()).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Metadatos resumidos para guardar en la ficha del recurso.
 pub fn summary(m: &RbxModel) -> serde_json::Value {
     let dims: Vec<f32> = (0..3).map(|a| ((m.bounds_max[a] - m.bounds_min[a]) * 100.0).round() / 100.0).collect();

@@ -4,6 +4,7 @@ use tauri::Manager;
 use vault_core::*;
 
 struct AppState(Mutex<Vault>);
+struct BridgeState { port: u16, token: String, error: Option<String> }
 type R<T> = std::result::Result<T, String>;
 fn e<E: std::fmt::Display>(x: E) -> String { x.to_string() }
 
@@ -75,6 +76,25 @@ struct McpInfo { path: String, exists: bool, vault_root: String, claude_code: St
     })
 }
 
+#[derive(serde::Serialize)]
+struct BridgeInfo { running: bool, port: u16, error: Option<String>, plugin_path: Option<String>, plugin_installed: bool }
+
+fn plugin_file() -> Option<PathBuf> { vault_bridge::studio_plugins_dir().map(|d| d.join("RobloxVault.lua")) }
+
+#[tauri::command] fn bridge_info(b: tauri::State<BridgeState>) -> R<BridgeInfo> {
+    let p = plugin_file();
+    Ok(BridgeInfo { running: b.error.is_none(), port: b.port, error: b.error.clone(), plugin_installed: p.as_ref().map_or(false, |p| p.exists()), plugin_path: p.map(|p| p.display().to_string()) })
+}
+
+/// Escribe el plugin (con puerto y token) en la carpeta de plugins locales de Studio.
+#[tauri::command] fn install_plugin(s: tauri::State<AppState>, b: tauri::State<BridgeState>) -> R<String> {
+    let path = plugin_file().ok_or("no se encontró %LOCALAPPDATA% (¿Windows?)")?;
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(e)?;
+    std::fs::write(&path, vault_bridge::plugin_with_config(b.port, &b.token)).map_err(e)?;
+    s.0.lock().map_err(e)?.log("app", "plugin.install", &path.display().to_string(), "", false).map_err(e)?;
+    Ok(path.display().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -85,10 +105,19 @@ pub fn run() {
             // ROBLOX_VAULT_HOME permite compartir la bóveda con el servidor MCP.
             let root = std::env::var("ROBLOX_VAULT_HOME").map(PathBuf::from)
                 .unwrap_or(app.path().document_dir()?.join("RobloxVault").join("data"));
-            app.manage(AppState(Mutex::new(Vault::open(root)?)));
+            let vault = Vault::open(&root)?;
+            // token del puente con Studio (se genera una vez y se guarda en la bóveda)
+            let token = match vault.setting("bridge_token")? { Some(t) => t, None => { let t = uuid::Uuid::new_v4().simple().to_string(); vault.set_setting("bridge_token", &t)?; t } };
+            let port = vault_bridge::DEFAULT_PORT;
+            let error = match Vault::open(&root) {
+                Ok(v2) => vault_bridge::spawn(std::sync::Arc::new(vault_bridge::Bridge::new(v2, token.clone(), root.join("incoming"))), port).err(),
+                Err(x) => Some(x.to_string()),
+            };
+            app.manage(BridgeState { port, token, error });
+            app.manage(AppState(Mutex::new(vault)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info])
+        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info, bridge_info, install_plugin])
         .run(tauri::generate_context!())
         .expect("error al iniciar ROBLOX VAULT");
 }

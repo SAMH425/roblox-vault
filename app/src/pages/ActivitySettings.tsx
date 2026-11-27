@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Copy, DatabaseBackup, PlugZap, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Blocks, Copy, DatabaseBackup, PlugZap, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { useUpdater } from '../components/Updater'
 import { api, type Activity as Act, type IntegrityReport } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
@@ -35,8 +35,10 @@ export function Settings({ updater }: { updater: ReturnType<typeof useUpdater> }
   const [busy, setBusy] = useState(false)
   const push = useToast((s) => s.push)
   const [auto, setAuto] = useState(true)
+  const [bridge, setBridge] = useState<Awaited<ReturnType<typeof api.bridgeInfo>> | null>(null)
+  const [confirmPlugin, setConfirmPlugin] = useState(false)
   const [mcp, setMcp] = useState<Awaited<ReturnType<typeof api.mcpInfo>> | null>(null)
-  useEffect(() => { api.vaultPath().then(setPath).catch(toastError); api.mcpInfo().then(setMcp).catch(() => {}); api.getSetting('auto_capture_tested').then((v) => setAuto(v !== 'false')).catch(() => {}) }, [])
+  useEffect(() => { api.vaultPath().then(setPath).catch(toastError); api.mcpInfo().then(setMcp).catch(() => {}); api.bridgeInfo().then(setBridge).catch(() => {}); api.getSetting('auto_capture_tested').then((v) => setAuto(v !== 'false')).catch(() => {}) }, [])
   async function toggleAuto() { try { await api.setSetting('auto_capture_tested', String(!auto)); setAuto(!auto) } catch (e) { toastError(e) } }
 
   async function verify() {
@@ -56,6 +58,21 @@ export function Settings({ updater }: { updater: ReturnType<typeof useUpdater> }
           <p className="mt-1 text-sm text-zinc-400">Versión {updater.version || '—'} · {{ idle: 'Sin comprobar', checking: 'Buscando…', none: 'Estás al día', available: `Disponible ${updater.st.msg}`, downloading: 'Descargando…', error: updater.st.msg }[updater.st.kind]}</p></div>
         {updater.st.kind === 'available' ? <button className="btn-primary" onClick={updater.install}><RefreshCw size={16} />Actualizar</button>
           : <button className="btn-ghost" disabled={updater.st.kind === 'checking' || updater.st.kind === 'downloading'} onClick={updater.check}><RefreshCw size={16} />Buscar</button>}
+      </div>
+      <div className="card mb-4 p-5">
+        <h3 className="flex items-center gap-2 font-medium text-white"><Blocks size={16} className="text-accent" />Plugin de Roblox Studio</h3>
+        {!bridge ? <div className="skeleton mt-3 h-10" /> : <>
+          <p className="mt-1 text-sm text-zinc-400">
+            Conexión local: {bridge.running ? <span className="text-ok">activa en 127.0.0.1:{bridge.port}</span> : <span className="text-red-400">{bridge.error}</span>}
+            {' · '}Plugin: {bridge.plugin_installed ? <span className="text-ok">instalado</span> : <span className="text-amber-300">no instalado</span>}
+          </p>
+          {confirmPlugin
+            ? <div className="mt-3 rounded-xl bg-panel/60 p-3 text-sm text-zinc-300">Se escribirá <span className="font-mono text-xs text-accent">{bridge.plugin_path}</span>{bridge.plugin_installed && ' (reemplaza la versión anterior del plugin de ROBLOX VAULT)'}. Después reinicia Roblox Studio.
+                <div className="mt-2 flex gap-2"><button className="btn-primary" onClick={async () => { try { await api.installPlugin(); push('ok', 'Plugin instalado. Reinicia Roblox Studio.'); setConfirmPlugin(false); setBridge(await api.bridgeInfo()) } catch (e) { toastError(e) } }}>Confirmar</button>
+                <button className="btn-ghost" onClick={() => setConfirmPlugin(false)}>Cancelar</button></div></div>
+            : <button className="btn-primary mt-3" disabled={!bridge.plugin_path} onClick={() => setConfirmPlugin(true)}><Blocks size={14} />{bridge.plugin_installed ? 'Actualizar plugin' : 'Instalar plugin en Studio'}</button>}
+          <p className="mt-2 text-xs text-zinc-500">En Studio aparece la pestaña ROBLOX VAULT. La primera vez Studio te pedirá permiso para conectarse a 127.0.0.1: acéptalo.</p>
+        </>}
       </div>
       <div className="card mb-4 p-5">
         <h3 className="flex items-center gap-2 font-medium text-white"><PlugZap size={16} className="text-accent" />Conectar Claude Code (MCP)</h3>
