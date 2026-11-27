@@ -141,6 +141,14 @@ pub fn run() {
                 Err(x) => Some(x.to_string()),
             };
             app.manage(BridgeState { port, token, error });
+            // buzón de importación: Documentos/RobloxVault/inbox/*.vault-import.json (lo usa Claude para ordenar recursos)
+            let inbox = root.parent().map(|p| p.join("inbox")).unwrap_or(root.join("inbox"));
+            if let Ok(v3) = Vault::open(&root) {
+                std::thread::spawn(move || loop {
+                    if let Err(x) = v3.process_inbox(&inbox) { let _ = v3.log("app", "inbox.error", "", &x.to_string(), false); }
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                });
+            }
             app.manage(AppState(Mutex::new(vault)));
             Ok(())
         })

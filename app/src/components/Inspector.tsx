@@ -82,6 +82,8 @@ function Body({ asset, projects, onClose, onChanged, onThumb, onTrash }: { asset
           <label className="text-xs text-zinc-400">Proyecto<select className="input mt-1 w-full" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">Global (compartido)</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         </section>
+        {asset.kind === 'audio' && <AudioPlayer asset={asset} version={shown} />}
+        {typeof asset.metadata.tag === 'string' && <p className="text-xs text-zinc-500">Categoría: <span className="text-accent">{asset.metadata.tag}</span>{typeof asset.metadata.source_path === 'string' && <> · origen <span className="font-mono">{asset.metadata.source_path}</span></>}</p>}
         <RobloxIdField asset={asset} onChanged={onChanged} />
         <section>
           <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-medium text-zinc-300">Metadatos</h3>
@@ -151,4 +153,15 @@ function RobloxIdField({ asset, onChanged }: { asset: Asset; onChanged: () => vo
       {!current && asset.kind === 'texture' && <p className="mt-1 text-[11px] text-zinc-500">Súbela en Studio (Asset Manager → Import) o pídeselo a Claude, y pega aquí el ID para reutilizarla sin volver a subirla.</p>}
     </section>
   )
+}
+
+function AudioPlayer({ asset, version }: { asset: Asset; version: number }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let u: string | null = null
+    const type = asset.format === 'ogg' ? 'audio/ogg' : asset.format === 'wav' ? 'audio/wav' : 'audio/mpeg'
+    api.blob(asset.id, version).then((b) => { u = URL.createObjectURL(new Blob([b], { type })); setUrl(u) }).catch(toastError)
+    return () => { if (u) URL.revokeObjectURL(u) }
+  }, [asset.id, version])
+  return url ? <audio controls src={url} className="w-full" /> : <div className="skeleton h-12" />
 }

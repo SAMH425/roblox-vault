@@ -72,6 +72,7 @@ pub fn classify(name: &str) -> (String, String) {
         "png" | "jpg" | "jpeg" | "tga" | "bmp" => "texture",
         "json" | "toml" | "yaml" | "yml" => "config",
         "ogg" | "mp3" | "wav" => "audio",
+        "md" | "txt" | "pdf" => "doc",
         _ => "other",
     };
     (kind.into(), if ext.is_empty() { "bin".into() } else { ext })
@@ -852,7 +853,7 @@ impl Vault {
         for f in files {
             let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
             let (kind, _) = classify(&fname);
-            if kind == "other" || fname.to_lowercase().starts_with("license") { rep.skipped += 1; continue; }
+            if kind == "other" || kind == "doc" || fname.to_lowercase().starts_with("license") { rep.skipped += 1; continue; }
             match self.import_file(&f, project_id, None) {
                 Ok(r) if r.duplicate_of.is_some() => rep.duplicates += 1,
                 Ok(r) => {
@@ -1006,6 +1007,113 @@ impl Vault {
     pub fn version_thumbnail(&self, asset_id: &str, version: i64) -> Result<Option<Vec<u8>>> {
         let p = self.thumb_version_path(asset_id, version)?;
         Ok(if p.exists() { Some(fs::read(p)?) } else { None })
+    }
+}
+
+
+/// Coincidencia de rutas con comodines: `*` dentro de un segmento, `**` cualquier número de carpetas.
+pub fn glob_match(pattern: &str, path: &str) -> bool {
+    fn seg(p: &str, s: &str) -> bool {
+        let (p, s) = (p.to_lowercase(), s.to_lowercase());
+        let parts: Vec<&str> = p.split('*').collect();
+        if parts.len() == 1 { return p == s; }
+        let mut rest = s.as_str();
+        for (i, part) in parts.iter().enumerate() {
+            if i == 0 { if !rest.starts_with(part) { return false; } rest = &rest[part.len()..]; }
+            else if i == parts.len() - 1 { return rest.ends_with(part); }
+            else if let Some(k) = rest.find(part) { rest = &rest[k + part.len()..]; } else { return false; }
+        }
+        true
+    }
+    fn go(p: &[&str], s: &[&str]) -> bool {
+        match (p.first(), s.first()) {
+            (None, None) => true,
+            (Some(&"**"), _) => go(&p[1..], s) || (!s.is_empty() && go(p, &s[1..])),
+            (Some(a), Some(b)) => seg(a, b) && go(&p[1..], &s[1..]),
+            _ => false,
+        }
+    }
+    let p: Vec<&str> = pattern.split('/').filter(|x| !x.is_empty()).collect();
+    let s: Vec<&str> = path.split('/').filter(|x| !x.is_empty()).collect();
+    go(&p, &s)
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ImportGroup { pub tag: String, pub root: String, pub include: Vec<String>, #[serde(default)] pub exclude: Vec<String> }
+
+#[derive(Deserialize, Debug)]
+pub struct ImportManifest {
+    pub project: String, #[serde(default)] pub description: String,
+    pub groups: Vec<ImportGroup>,
+    #[serde(default)] pub notes: Vec<(String, String)>,
+}
+
+#[derive(Serialize, Debug, Default)]
+pub struct ManifestResult { pub project: String, pub imported: usize, pub duplicates: usize, pub errors: Vec<String> }
+
+impl Vault {
+    /// Importa una selección de archivos (buzón de importación). Solo copia: los originales no se tocan.
+    pub fn import_manifest(&self, m: &ImportManifest, actor: &str) -> Result<ManifestResult> {
+        let name = m.project.trim();
+        let project = match self.list_projects()?.into_iter().find(|p| p.name.eq_ignore_ascii_case(name)) {
+            Some(p) => p,
+            None => self.create_project(name, &m.description)?,
+        };
+        let mut res = ManifestResult { project: project.name.clone(), ..Default::default() };
+        for g in &m.groups {
+            let root = Path::new(&g.root);
+            if !root.is_absolute() || !root.is_dir() { res.errors.push(format!("carpeta no válida: {}", g.root)); continue; }
+            let mut stack = vec![root.to_path_buf()];
+            let mut files = vec![];
+            while let Some(d) = stack.pop() {
+                for e in fs::read_dir(&d)? { let p = e?.path(); if p.is_dir() { stack.push(p) } else { files.push(p) } }
+            }
+            files.sort();
+            for f in files {
+                let rel = f.strip_prefix(root).unwrap_or(&f).to_string_lossy().replace('\\', "/");
+                if !g.include.iter().any(|p| glob_match(p, &rel)) || g.exclude.iter().any(|p| glob_match(p, &rel)) { continue; }
+                match self.import_file(&f, Some(&project.id), None) {
+                    Ok(r) if r.duplicate_of.is_some() => res.duplicates += 1,
+                    Ok(r) => {
+                        let mut meta = r.asset.metadata.clone();
+                        if let Some(o) = meta.as_object_mut() {
+                            o.insert("tag".into(), serde_json::json!(g.tag));
+                            o.insert("source_path".into(), serde_json::json!(f.display().to_string()));
+                            o.insert("imported_by".into(), serde_json::json!(actor));
+                        }
+                        self.update_asset(&r.asset.id, None, None, Some(&meta))?;
+                        res.imported += 1;
+                    }
+                    Err(e) => res.errors.push(format!("{rel}: {e}")),
+                }
+            }
+        }
+        let existing = self.project_context(&project.id)?.notes;
+        for (kind, text) in &m.notes {
+            if !existing.iter().any(|n| &n.text == text) { if let Err(e) = self.add_project_note(&project.id, kind, text) { res.errors.push(e.to_string()); } }
+        }
+        self.log(actor, "import.manifest", &project.name, &format!("{} nuevos, {} ya existían", res.imported, res.duplicates), false)?;
+        Ok(res)
+    }
+
+    /// Procesa los manifiestos `*.vault-import.json` del buzón y los mueve a `done/` con su resultado.
+    pub fn process_inbox(&self, inbox: &Path) -> Result<Vec<ManifestResult>> {
+        fs::create_dir_all(inbox.join("done"))?;
+        let mut out = vec![];
+        let mut entries: Vec<PathBuf> = fs::read_dir(inbox)?.filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file() && p.to_string_lossy().ends_with(".vault-import.json")).collect();
+        entries.sort();
+        for p in entries {
+            let fname = p.file_name().unwrap().to_string_lossy().to_string();
+            let result = fs::read_to_string(&p).map_err(VaultError::from)
+                .and_then(|t| serde_json::from_str::<ImportManifest>(&t).map_err(|e| VaultError::Invalid(format!("manifiesto inválido: {e}"))))
+                .and_then(|m| self.import_manifest(&m, "claude-inbox"));
+            let report = match &result { Ok(r) => serde_json::to_string_pretty(r).unwrap(), Err(e) => format!("{{\"error\": {:?}}}", e.to_string()) };
+            fs::write(inbox.join("done").join(format!("{fname}.result.json")), report)?;
+            fs::rename(&p, inbox.join("done").join(&fname))?;
+            if let Ok(r) = result { out.push(r); }
+        }
+        Ok(out)
     }
 }
 
@@ -1308,5 +1416,48 @@ mod tests {
         v.save_version_thumbnail(&a.id, 1, png).unwrap();
         assert_eq!(v.version_thumbnail(&a.id, 1).unwrap().unwrap(), png);
         assert!(v.save_version_thumbnail(&a.id, 2, png).is_err());
+    }
+
+    #[test]
+    fn inbox_manifest_import() {
+        assert!(glob_match("export/*.fbx", "export/AH_Exterior.fbx"));
+        assert!(!glob_match("export/*.fbx", "export/vo/a.fbx"));
+        assert!(glob_match("**/*.mp3", "audio/ui/click.mp3"));
+        assert!(glob_match("**/*.mp3", "x.mp3"));
+        assert!(glob_match("meshy/*.glb", "meshy/chips.glb") && glob_match("meshy/*_preview.glb", "meshy/chips_preview.glb"));
+        assert!(glob_match("tex/*_512*.png", "tex/asphalt_02_512_t6b6b70.png"));
+        let root = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        fs::create_dir_all(game.path().join("export/vo")).unwrap();
+        file(&game.path().join("export"), "AH_Exterior.fbx", b"fbx1");
+        file(&game.path().join("export"), "pipeline_test.fbx", b"test");
+        file(&game.path().join("export/vo"), "dan.mp3", b"mp3");
+        file(game.path(), "GUIDE.md", b"# guia");
+        let m = serde_json::json!({ "project": "AFTER HOURS", "description": "terror",
+            "groups": [{ "tag": "modelos", "root": game.path(), "include": ["export/*.fbx"], "exclude": ["**/*test*"] },
+                       { "tag": "voces", "root": game.path(), "include": ["export/vo/*.mp3"] },
+                       { "tag": "docs", "root": game.path(), "include": ["*.md"] },
+                       { "tag": "x", "root": "relativo", "include": ["*"] }],
+            "notes": [["architecture", "Gasolinera nocturna, un jugador"]] });
+        fs::write(inbox.path().join("after.vault-import.json"), m.to_string()).unwrap();
+        fs::write(inbox.path().join("bad.vault-import.json"), "{").unwrap();
+        let r = v.process_inbox(inbox.path()).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].imported, r[0].errors.len()), (3, 1));
+        let p = v.list_projects().unwrap().into_iter().find(|p| p.name == "AFTER HOURS").unwrap();
+        let assets = v.list_assets(None, Some(&p.id), None).unwrap();
+        assert_eq!(assets.len(), 3);
+        assert!(assets.iter().any(|a| a.kind == "doc"));
+        assert!(assets.iter().all(|a| a.metadata["imported_by"] == "claude-inbox"));
+        assert!(inbox.path().join("done/after.vault-import.json").exists());
+        assert!(fs::read_to_string(inbox.path().join("done/bad.vault-import.json.result.json")).unwrap().contains("error"));
+        assert!(game.path().join("export/AH_Exterior.fbx").exists(), "los originales no se mueven");
+        // repetir es idempotente
+        fs::write(inbox.path().join("again.vault-import.json"), m.to_string()).unwrap();
+        let r = v.process_inbox(inbox.path()).unwrap();
+        assert_eq!((r[0].imported, r[0].duplicates), (0, 3));
+        assert_eq!(v.project_context(&p.id).unwrap().notes.len(), 1);
     }
 }

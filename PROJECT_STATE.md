@@ -109,6 +109,13 @@
 - Guía de estilo por juego (Project Memory): estilo, paleta (#RRGGBB validada), materiales, fuente, pack y
   variante de iconos, notas de UI, qué evitar. MCP la devuelve en `vault_get_project_context.style_guide`.
 
+## Buzón de importación ✅
+- `Documentos/RobloxVault/inbox/*.vault-import.json`: la app los procesa cada 20 s (solo copia, nunca mueve ni
+  borra originales), crea el proyecto si no existe, etiqueta cada archivo (tag, origen) y deja el resultado en `done/`.
+- Nuevas bibliotecas: Audio (con reproductor) y Docs (MD/TXT/PDF, buscables por contenido).
+- Importación curada de 11 juegos del usuario (modelos finales, texturas usadas, UI, VFX, voces, música, docs;
+  fuera pruebas, previews, fuentes de Meshy duplicadas, .blend, zips y carpetas "no se usa").
+
 ## Pendiente
 Fase 7: pulido + instalador.
 

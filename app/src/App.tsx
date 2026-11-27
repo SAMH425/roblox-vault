@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { Activity as ActIcon, Boxes, Image as ImageIcon, Code2, FolderGit2, LayoutDashboard, Network, Puzzle, Settings as Cog, Clapperboard } from 'lucide-react'
+import { Activity as ActIcon, Boxes, FileText, Music, Image as ImageIcon, Code2, FolderGit2, LayoutDashboard, Network, Puzzle, Settings as Cog, Clapperboard } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import Library from './pages/Library'
 import Projects from './pages/Projects'
@@ -17,6 +17,8 @@ const NAV = [
   { id: 'models', label: '3D Asset Library', icon: Boxes },
   { id: 'code', label: 'Code Vault', icon: Code2 },
   { id: 'icons', label: 'UI & Icons', icon: ImageIcon },
+  { id: 'audio', label: 'Audio', icon: Music },
+  { id: 'docs', label: 'Docs', icon: FileText },
   { id: 'systems', label: 'Systems Library', icon: Puzzle },
   { id: 'projects', label: 'Project Memory', icon: FolderGit2 },
   { id: 'anim', label: 'Animations', icon: Clapperboard },
@@ -32,6 +34,8 @@ function render(p: Page, u: ReturnType<typeof useUpdater>) {
     case 'models': return <Library kind="model" title="3D Asset Library" subtitle="GLB, GLTF, FBX, OBJ, RBXM, RBXMX" exts={['glb', 'gltf', 'fbx', 'obj', 'rbxm', 'rbxmx']} />
     case 'code': return <Library kind="script" title="Code Vault" subtitle="Scripts y ModuleScripts Luau" exts={['lua', 'luau']} />
     case 'icons': return <Library kind="texture" title="UI & Icons" subtitle="Iconos e imágenes de interfaz (PNG, JPG, TGA)" exts={['png', 'jpg', 'jpeg', 'tga', 'bmp']} />
+    case 'audio': return <Library kind="audio" title="Audio" subtitle="Música, efectos y voces (MP3, OGG, WAV)" exts={['mp3', 'ogg', 'wav']} />
+    case 'docs': return <Library kind="doc" title="Docs" subtitle="Guías, planes y notas de cada juego (MD, TXT, PDF)" exts={['md', 'txt', 'pdf']} />
     case 'projects': return <Projects />
     case 'activity': return <Activity />
     case 'settings': return <Settings updater={u} />
