@@ -78,6 +78,7 @@ export const api = {
   setRobloxId: (id: string, robloxId: string) => call<Asset>('set_roblox_id', { id, robloxId }),
   saveVersionThumb: (id: string, version: number, png: Uint8Array) => call<void>('save_version_thumbnail', { id, version, png: Array.from(png) }),
   versionThumb: async (id: string, version: number) => { const b = await call<ArrayBuffer>('version_thumbnail', { id, version }); return b.byteLength ? b : null },
+  missingThumbs: () => call<Asset[]>('missing_thumbnails'),
   versions: (id: string) => call<Version[]>('list_versions', { id }),
   text: (id: string, version?: number) => call<string | null>('get_text', { id, version: version ?? null }),
   addVersion: (id: string, path: string) => call<ImportResult>('add_version', { id, path }),

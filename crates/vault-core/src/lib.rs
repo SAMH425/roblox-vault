@@ -1004,6 +1004,14 @@ impl Vault {
         if version != a.version { if let Ok(Some(latest)) = self.version_thumbnail(asset_id, a.version) { fs::write(self.root.join("thumbs").join(format!("{asset_id}.png")), latest)?; } }
         Ok(())
     }
+    /// Modelos visibles en el visor que aún no tienen miniatura (para generarlas en segundo plano).
+    pub fn missing_thumbnails(&self, limit: usize) -> Result<Vec<Asset>> {
+        let viewable = ["glb", "gltf", "obj", "fbx", "rbxm", "rbxmx"];
+        Ok(self.search_assets(Some("model"), None, None, false)?.into_iter()
+            .filter(|a| viewable.contains(&a.format.as_str()) && !self.root.join("thumbs").join(format!("{}.png", a.id)).exists() && a.metadata.get("thumb_failed").is_none())
+            .take(limit).collect())
+    }
+
     pub fn version_thumbnail(&self, asset_id: &str, version: i64) -> Result<Option<Vec<u8>>> {
         let p = self.thumb_version_path(asset_id, version)?;
         Ok(if p.exists() { Some(fs::read(p)?) } else { None })

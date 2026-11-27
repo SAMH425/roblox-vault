@@ -8,6 +8,8 @@ import Systems from './pages/Systems'
 import Dependencies from './pages/Dependencies'
 import Animations from './pages/Animations'
 import { UpdateBanner, useUpdater } from './components/Updater'
+import { useThumbWorker } from './components/ThumbWorker'
+import { useThumbBus } from './state/thumbs'
 import { Activity, Settings } from './pages/ActivitySettings'
 import { Toasts } from './components/ui'
 import { isTauri } from './lib/api'
@@ -48,6 +50,8 @@ function render(p: Page, u: ReturnType<typeof useUpdater>) {
 export default function App() {
   const [page, setPage] = useState<Page>('dash')
   const u = useUpdater()
+  const bump = useThumbBus((s) => s.bump)
+  const thumbs = useThumbWorker(bump)
   return (
     <div className="flex h-full">
       <aside className="flex w-60 shrink-0 flex-col border-r border-white/[0.06] bg-surface/60 p-4">
@@ -63,7 +67,10 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="mt-auto"><UpdateBanner u={u} /></div>
+        <div className="mt-auto"><UpdateBanner u={u} />
+          {thumbs && <div className="mx-1 mb-3 rounded-xl bg-panel/60 p-2.5 text-[11px] text-zinc-400">Miniaturas {thumbs.done}/{thumbs.total}
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-bg"><div className="h-full bg-violet transition-all" style={{ width: `${(thumbs.done / thumbs.total) * 100}%` }} /></div></div>}
+        </div>
         <div className="px-2 text-[11px] text-zinc-500">v{u.version || '0.1.0'} · Fase 6{!isTauri() && <div className="mt-1 text-amber-300">Modo navegador: sin bóveda</div>}</div>
       </aside>
       <main className="flex-1 overflow-y-auto">
