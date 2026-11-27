@@ -1,0 +1,51 @@
+# Cada push a main: pruebas → instalador Windows firmado → GitHub Release → la app instalada se actualiza sola.
+name: release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: "app/src-tauri -> target\ncrates/vault-core -> target" }
+
+      - name: Pruebas del núcleo
+        run: cargo test --manifest-path crates/vault-core/Cargo.toml
+
+      - name: Versión automática (0.MINOR.run)
+        shell: pwsh
+        run: |
+          $c = Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $parts = $c.version.Split('.')
+          $v = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
+          $c.version = $v
+          $c.plugins.updater.endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
+          $c | ConvertTo-Json -Depth 20 | Set-Content app/src-tauri/tauri.conf.json
+          "APP_VERSION=$v" >> $env:GITHUB_ENV
+
+      - run: npm ci
+        working-directory: app
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          projectPath: app
+          tagName: v${{ env.APP_VERSION }}
+          releaseName: ROBLOX VAULT v${{ env.APP_VERSION }}
+          releaseBody: "Build automático de ${{ github.sha }}"
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

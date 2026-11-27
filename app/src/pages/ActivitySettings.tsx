@@ -1,0 +1,70 @@
+import { useEffect, useState } from 'react'
+import { DatabaseBackup, RefreshCw, ShieldCheck } from 'lucide-react'
+import type { useUpdater } from '../components/Updater'
+import { api, type Activity as Act, type IntegrityReport } from '../lib/api'
+import { toastError, useToast } from '../state/toast'
+import { PageHeader } from '../components/ui'
+
+export function Activity() {
+  const [items, setItems] = useState<Act[] | null>(null)
+  useEffect(() => { api.activity(200).then(setItems).catch((e) => { setItems([]); toastError(e) }) }, [])
+  return (
+    <div>
+      <PageHeader title="Activity" subtitle="Registro de todas las operaciones" />
+      <div className="card divide-y divide-white/[0.04]">
+        {items === null ? <div className="skeleton m-4 h-20" /> : items.length === 0 ? <p className="p-6 text-sm text-zinc-500">Sin actividad.</p>
+          : items.map((a) => (
+            <div key={a.id} className="grid grid-cols-[170px_160px_1fr_auto] gap-4 px-4 py-2.5 text-sm">
+              <span className="text-zinc-500">{new Date(a.at).toLocaleString()}</span>
+              <span className={a.destructive ? 'text-red-400' : 'text-accent'}>{a.action}</span>
+              <span className="truncate text-zinc-300">{a.target} <span className="text-zinc-500">{a.detail}</span></span>
+              <span className="text-xs text-zinc-500">{a.actor}</span>
+            </div>))}
+      </div>
+    </div>
+  )
+}
+
+export function Settings({ updater }: { updater: ReturnType<typeof useUpdater> }) {
+  const [path, setPath] = useState('')
+  const [rep, setRep] = useState<IntegrityReport | null>(null)
+  const [busy, setBusy] = useState(false)
+  const push = useToast((s) => s.push)
+  useEffect(() => { api.vaultPath().then(setPath).catch(toastError) }, [])
+
+  async function verify() {
+    setBusy(true)
+    try { setRep(await api.verify()) } catch (e) { toastError(e) } finally { setBusy(false) }
+  }
+  async function backup() {
+    try { push('ok', `Copia creada: ${await api.backup()}`) } catch (e) { toastError(e) }
+  }
+
+  return (
+    <div>
+      <PageHeader title="Settings" subtitle="Almacenamiento, integridad y copias de seguridad" />
+      <div className="card mb-4 p-5"><h3 className="text-sm text-zinc-400">Ubicación de la bóveda</h3><p className="mt-1 font-mono text-sm text-white">{path || '—'}</p></div>
+      <div className="card mb-4 flex items-center justify-between p-5">
+        <div><h3 className="font-medium text-white">Actualizaciones</h3>
+          <p className="mt-1 text-sm text-zinc-400">Versión {updater.version || '—'} · {{ idle: 'Sin comprobar', checking: 'Buscando…', none: 'Estás al día', available: `Disponible ${updater.st.msg}`, downloading: 'Descargando…', error: updater.st.msg }[updater.st.kind]}</p></div>
+        {updater.st.kind === 'available' ? <button className="btn-primary" onClick={updater.install}><RefreshCw size={16} />Actualizar</button>
+          : <button className="btn-ghost" disabled={updater.st.kind === 'checking' || updater.st.kind === 'downloading'} onClick={updater.check}><RefreshCw size={16} />Buscar</button>}
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="card p-5">
+          <h3 className="font-medium text-white">Integridad de archivos</h3>
+          <p className="mt-1 text-sm text-zinc-400">Recalcula el SHA-256 de cada original. Comprueba que el archivo no cambió, no que funcione.</p>
+          <button className="btn-primary mt-4" disabled={busy} onClick={verify}><ShieldCheck size={16} />{busy ? 'Verificando…' : 'Verificar'}</button>
+          {rep && <p className="mt-3 text-sm"><span className="text-ok">{rep.ok}/{rep.checked} correctos</span>
+            {rep.missing.length > 0 && <span className="ml-3 text-amber-300">{rep.missing.length} faltan</span>}
+            {rep.corrupted.length > 0 && <span className="ml-3 text-red-400">{rep.corrupted.length} corruptos</span>}</p>}
+        </div>
+        <div className="card p-5">
+          <h3 className="font-medium text-white">Copia de seguridad</h3>
+          <p className="mt-1 text-sm text-zinc-400">Copia consistente de la base de datos. Los archivos originales son inmutables y no se duplican.</p>
+          <button className="btn-ghost mt-4" onClick={backup}><DatabaseBackup size={16} />Crear copia</button>
+        </div>
+      </div>
+    </div>
+  )
+}

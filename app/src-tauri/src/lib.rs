@@ -1,0 +1,57 @@
+use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::Manager;
+use vault_core::*;
+
+struct AppState(Mutex<Vault>);
+type R<T> = std::result::Result<T, String>;
+fn e<E: std::fmt::Display>(x: E) -> String { x.to_string() }
+
+#[tauri::command] fn get_stats(s: tauri::State<AppState>) -> R<Stats> { s.0.lock().map_err(e)?.stats().map_err(e) }
+#[tauri::command] fn list_projects(s: tauri::State<AppState>) -> R<Vec<Project>> { s.0.lock().map_err(e)?.list_projects().map_err(e) }
+#[tauri::command] fn create_project(s: tauri::State<AppState>, name: String, description: String) -> R<Project> { s.0.lock().map_err(e)?.create_project(&name, &description).map_err(e) }
+#[tauri::command] fn list_assets(s: tauri::State<AppState>, kind: Option<String>, project_id: Option<String>, query: Option<String>) -> R<Vec<Asset>> {
+    s.0.lock().map_err(e)?.list_assets(kind.as_deref(), project_id.as_deref(), query.as_deref().filter(|q| !q.is_empty())).map_err(e) }
+#[tauri::command] fn import_files(s: tauri::State<AppState>, paths: Vec<String>, project_id: Option<String>) -> R<Vec<ImportResult>> {
+    let v = s.0.lock().map_err(e)?;
+    paths.iter().map(|p| v.import_file(&PathBuf::from(p), project_id.as_deref(), None).map_err(e)).collect() }
+#[tauri::command] fn set_status(s: tauri::State<AppState>, id: String, status: String) -> R<()> { s.0.lock().map_err(e)?.set_status(&id, &status).map_err(e) }
+#[tauri::command] fn restore_asset(s: tauri::State<AppState>, id: String, version: Option<i64>, dest_dir: String) -> R<String> {
+    s.0.lock().map_err(e)?.restore_asset(&id, version, &PathBuf::from(dest_dir)).map(|p| p.display().to_string()).map_err(e) }
+#[tauri::command] fn verify_integrity(s: tauri::State<AppState>) -> R<IntegrityReport> { s.0.lock().map_err(e)?.verify_integrity().map_err(e) }
+#[tauri::command] fn create_backup(s: tauri::State<AppState>) -> R<String> { s.0.lock().map_err(e)?.backup().map(|p| p.display().to_string()).map_err(e) }
+#[tauri::command] fn recent_activity(s: tauri::State<AppState>, limit: i64) -> R<Vec<Activity>> { s.0.lock().map_err(e)?.recent_activity(limit).map_err(e) }
+#[tauri::command] fn vault_path(s: tauri::State<AppState>) -> R<String> { Ok(s.0.lock().map_err(e)?.root.display().to_string()) }
+
+#[tauri::command] fn list_versions(s: tauri::State<AppState>, id: String) -> R<Vec<Version>> { s.0.lock().map_err(e)?.list_versions(&id).map_err(e) }
+#[tauri::command] fn get_text(s: tauri::State<AppState>, id: String, version: Option<i64>) -> R<Option<String>> { s.0.lock().map_err(e)?.get_text(&id, version).map_err(e) }
+#[tauri::command] fn add_version(s: tauri::State<AppState>, id: String, path: String) -> R<ImportResult> { s.0.lock().map_err(e)?.import_file(&PathBuf::from(path), None, Some(&id)).map_err(e) }
+#[tauri::command] fn update_asset(s: tauri::State<AppState>, id: String, name: Option<String>, project_id: Option<String>, metadata: Option<serde_json::Value>) -> R<Asset> {
+    let pid = project_id.as_deref().map(|p| if p.is_empty() { None } else { Some(p) });
+    s.0.lock().map_err(e)?.update_asset(&id, name.as_deref(), pid, metadata.as_ref()).map_err(e) }
+#[tauri::command] fn list_systems(s: tauri::State<AppState>, project_id: Option<String>, query: Option<String>) -> R<Vec<System>> { s.0.lock().map_err(e)?.list_systems(project_id.as_deref(), query.as_deref()).map_err(e) }
+#[tauri::command] fn create_system(s: tauri::State<AppState>, input: SystemInput) -> R<System> { s.0.lock().map_err(e)?.create_system(&input).map_err(e) }
+#[tauri::command] fn update_system(s: tauri::State<AppState>, id: String, input: SystemInput) -> R<System> { s.0.lock().map_err(e)?.update_system(&id, &input).map_err(e) }
+#[tauri::command] fn set_system_status(s: tauri::State<AppState>, id: String, status: String) -> R<()> { s.0.lock().map_err(e)?.set_system_status(&id, &status).map_err(e) }
+#[tauri::command] fn add_system_member(s: tauri::State<AppState>, system_id: String, asset_id: String, role: String) -> R<()> { s.0.lock().map_err(e)?.add_system_member(&system_id, &asset_id, &role).map_err(e) }
+#[tauri::command] fn remove_system_member(s: tauri::State<AppState>, system_id: String, asset_id: String) -> R<()> { s.0.lock().map_err(e)?.remove_system_member(&system_id, &asset_id).map_err(e) }
+#[tauri::command] fn restore_system(s: tauri::State<AppState>, id: String, dest_dir: String) -> R<Vec<String>> {
+    s.0.lock().map_err(e)?.restore_system(&id, &PathBuf::from(dest_dir)).map(|v| v.iter().map(|p| p.display().to_string()).collect()).map_err(e) }
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // ROBLOX_VAULT_HOME permite compartir la bóveda con el servidor MCP.
+            let root = std::env::var("ROBLOX_VAULT_HOME").map(PathBuf::from)
+                .unwrap_or(app.path().document_dir()?.join("RobloxVault").join("data"));
+            app.manage(AppState(Mutex::new(Vault::open(root)?)));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system])
+        .run(tauri::generate_context!())
+        .expect("error al iniciar ROBLOX VAULT");
+}
