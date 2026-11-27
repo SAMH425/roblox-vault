@@ -86,7 +86,10 @@ impl Bridge {
             ("GET", ["search"]) => {
                 let pid = qp("place_id").and_then(|p| p.parse::<i64>().ok()).map(|p| json!({ "place_id": p }));
                 let project = match (qp("scope").as_deref(), pid) { (Some("project"), Some(p)) => self.project_for(&v, &p)?, _ => None };
-                let list = v.search_assets(qp("kind").as_deref(), project.as_deref(), qp("q").as_deref(), true).map_err(|e| e.to_string())?;
+                let list: Vec<Asset> = match qp("q") {
+                    Some(q) => v.search_ranked(qp("kind").as_deref(), project.as_deref(), &q, 60).map_err(|e| e.to_string())?.into_iter().map(|r| r.asset).collect(),
+                    None => v.search_assets(qp("kind").as_deref(), project.as_deref(), None, false).map_err(|e| e.to_string())?,
+                };
                 Ok(json!({ "assets": list.iter().take(60).map(brief).collect::<Vec<_>>() }))
             }
             ("GET", ["asset", id, "rbxm"]) => {

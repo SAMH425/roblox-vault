@@ -8,7 +8,7 @@ import { Empty, PageHeader, StatusBadge } from '../components/ui'
 import { Inspector } from '../components/Inspector'
 import { Thumb } from '../components/Thumb'
 
-type Sort = 'recent' | 'name' | 'size' | 'status'
+type Sort = 'relevance' | 'recent' | 'name' | 'size' | 'status'
 
 /** Biblioteca genérica: se usa para modelos, scripts, etc. filtrando por `kind`. */
 export default function Library({ kind, title, subtitle, exts }: { kind?: string; title: string; subtitle: string; exts?: string[] }) {
@@ -17,20 +17,21 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
   const [q, setQ] = useState('')
   const [projectId, setProjectId] = useState('')
   const [status, setStatusF] = useState('')
-  const [sort, setSort] = useState<Sort>('recent')
+  const [sort, setSort] = useState<Sort>('relevance')
   const [view, setView] = useState<'list' | 'grid'>(kind === 'model' ? 'grid' : 'list')
   const [sel, setSel] = useState<Asset | null>(null)
   const [thumbBump, setThumbBump] = useState(0)
   const push = useToast((s) => s.push)
 
   const load = useCallback(() => {
-    api.assets({ kind, projectId: projectId || undefined, query: q || undefined }).then(setItems).catch((e) => { setItems([]); toastError(e) })
+    const p = q.trim() ? api.ranked(q, { kind, projectId: projectId || undefined }).then((r) => r.map((x) => x.asset)) : api.assets({ kind, projectId: projectId || undefined })
+    p.then(setItems).catch((e) => { setItems([]); toastError(e) })
   }, [kind, projectId, q])
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t) }, [load])
   useEffect(() => { api.projects().then(setProjects).catch(() => {}) }, [])
 
   const shown = (items ?? []).filter((a) => !status || a.status === status).sort((a, b) =>
-    sort === 'name' ? a.name.localeCompare(b.name) : sort === 'size' ? b.size - a.size : sort === 'status' ? a.status.localeCompare(b.status) : b.updated_at.localeCompare(a.updated_at))
+    sort === 'relevance' ? 0 : sort === 'name' ? a.name.localeCompare(b.name) : sort === 'size' ? b.size - a.size : sort === 'status' ? a.status.localeCompare(b.status) : b.updated_at.localeCompare(a.updated_at))
 
   function changed() { load(); if (sel) api.assets({ kind }).then((l) => setSel(l.find((x) => x.id === sel.id) ?? null)).catch(() => {}) }
 
@@ -69,7 +70,7 @@ export default function Library({ kind, title, subtitle, exts }: { kind?: string
         </select>
         <select className="input" value={status} onChange={(e) => setStatusF(e.target.value)}><option value="">Todos los estados</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select>
         <select className="input" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-          <option value="recent">Recientes</option><option value="name">Nombre</option><option value="size">Tamaño</option><option value="status">Estado</option></select>
+          <option value="relevance">Relevancia</option><option value="recent">Recientes</option><option value="name">Nombre</option><option value="size">Tamaño</option><option value="status">Estado</option></select>
         <div className="flex rounded-xl border border-white/[0.08] p-0.5">
           {(['list', 'grid'] as const).map((v) => <button key={v} onClick={() => setView(v)} className={`rounded-lg px-2.5 ${view === v ? 'bg-violet/20 text-white' : 'text-zinc-500'}`}>{v === 'list' ? <List size={15} /> : <LayoutGrid size={15} />}</button>)}
         </div>

@@ -64,6 +64,7 @@ export const api = {
   mcpInfo: () => call<{ path: string; exists: boolean; vault_root: string; claude_code: string; claude_desktop: unknown }>('mcp_info'),
   bridgeInfo: () => call<{ running: boolean; port: number; error: string | null; plugin_path: string | null; plugin_installed: boolean }>('bridge_info'),
   installPlugin: () => call<string>('install_plugin'),
+  ranked: (query: string, f: { kind?: string; projectId?: string } = {}) => call<{ asset: Asset; score: number; matched: string[] }[]>('search_ranked', { query, kind: f.kind ?? null, projectId: f.projectId ?? null }),
   versions: (id: string) => call<Version[]>('list_versions', { id }),
   text: (id: string, version?: number) => call<string | null>('get_text', { id, version: version ?? null }),
   addVersion: (id: string, path: string) => call<ImportResult>('add_version', { id, path }),

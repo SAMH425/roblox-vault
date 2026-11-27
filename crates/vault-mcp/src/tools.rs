@@ -49,6 +49,7 @@ pub fn definitions() -> Value {
           "kind": { "type": "string", "enum": ["model", "script", "texture", "config", "audio", "animation", "other"] },
           "project": { "type": "string", "description": "id o nombre del proyecto; omítelo para buscar en todos" },
           "in_content": { "type": "boolean", "default": true, "description": "buscar también dentro del código" },
+          "mode": { "type": "string", "enum": ["relevance", "exact"], "default": "relevance", "description": "relevance: ranking local por palabras (camelCase, prefijos, código); exact: coincidencia de texto literal" },
           "include_systems": { "type": "boolean", "default": true } } } },
       { "name": "vault_get_asset", "description": "Ficha completa de un recurso: metadatos, versiones, estado de validación y dependencias.",
         "inputSchema": { "type": "object", "properties": { "id": id }, "required": ["id"] } },
@@ -84,10 +85,16 @@ pub fn call(v: &Vault, name: &str, a: &Value) -> R {
         "vault_search" => {
             let pid = s(a, "project").map(|p| resolve_project(v, p)).transpose()?;
             let q = s(a, "query");
-            let assets = v.search_assets(s(a, "kind"), pid.as_deref(), q, b(a, "in_content").unwrap_or(true)).map_err(e)?;
+            let relevance = s(a, "mode") != Some("exact") && q.is_some();
+            let (assets, scores): (Vec<Asset>, Vec<Value>) = if relevance {
+                v.search_ranked(s(a, "kind"), pid.as_deref(), q.unwrap_or(""), 100).map_err(e)?.into_iter().map(|r| { let sc = json!({ "score": r.score, "matched": r.matched }); (r.asset, sc) }).unzip()
+            } else {
+                let l = v.search_assets(s(a, "kind"), pid.as_deref(), q, b(a, "in_content").unwrap_or(true)).map_err(e)?; let n = l.len(); (l, vec![Value::Null; n])
+            };
             let systems = if b(a, "include_systems").unwrap_or(true) { v.list_systems(pid.as_deref(), q).map_err(e)? } else { vec![] };
             v.log("claude", "mcp.search", q.unwrap_or("*"), &format!("{} recursos, {} sistemas", assets.len(), systems.len()), false).map_err(e)?;
-            json!({ "count": assets.len(), "assets": assets.iter().take(100).map(brief).collect::<Vec<_>>(),
+            json!({ "count": assets.len(), "mode": if relevance { "relevance" } else { "exact" },
+                    "assets": assets.iter().zip(scores).take(100).map(|(x, sc)| { let mut o = brief(x); if !sc.is_null() { o["relevance"] = sc; } o }).collect::<Vec<_>>(),
                     "systems": systems.iter().map(|s| json!({ "id": s.id, "name": s.name, "status": s.status, "members": s.members.len(), "warnings": s.warnings })).collect::<Vec<_>>() })
         }
         "vault_get_asset" => {

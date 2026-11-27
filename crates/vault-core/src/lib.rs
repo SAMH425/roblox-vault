@@ -742,6 +742,78 @@ impl Vault {
     }
 }
 
+
+/// Tokens para búsqueda: separa por símbolos y por camelCase/PascalCase ("InventoryUIController" → inventory, ui, controller).
+pub fn search_tokens(s: &str) -> Vec<String> {
+    let mut out = vec![];
+    for word in s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        let chars: Vec<char> = word.chars().collect();
+        let mut cur = String::new();
+        for (i, &c) in chars.iter().enumerate() {
+            let boundary = i > 0 && ((c.is_uppercase() && chars[i - 1].is_lowercase())
+                || (c.is_uppercase() && chars.get(i + 1).map_or(false, |n| n.is_lowercase()) && chars[i - 1].is_uppercase())
+                || (c.is_ascii_digit() != chars[i - 1].is_ascii_digit()));
+            if boundary && !cur.is_empty() { out.push(cur.to_lowercase()); cur.clear(); }
+            cur.push(c);
+        }
+        if !cur.is_empty() { out.push(cur.to_lowercase()); }
+        if word.len() > 1 { let w = word.to_lowercase(); if !out.contains(&w) { out.push(w); } }
+    }
+    out
+}
+
+#[derive(Serialize, Debug)]
+pub struct Ranked { pub asset: Asset, pub score: f64, pub matched: Vec<String> }
+
+impl Vault {
+    /// Búsqueda por relevancia 100 % local (BM25 sobre nombre ×3, metadatos y código, con prefijos y camelCase).
+    /// No usa servicios externos ni modelos de IA.
+    pub fn search_ranked(&self, kind: Option<&str>, project_id: Option<&str>, query: &str, limit: usize) -> Result<Vec<Ranked>> {
+        let q: Vec<String> = search_tokens(query).into_iter().filter(|t| t.len() >= 2).collect();
+        if q.is_empty() { return Ok(self.search_assets(kind, project_id, None, false)?.into_iter().take(limit).map(|a| Ranked { asset: a, score: 0.0, matched: vec![] }).collect()); }
+        let assets = self.search_assets(kind, project_id, None, false)?;
+        let docs: Vec<(Asset, Vec<String>)> = assets.into_iter().map(|a| {
+            let mut toks = vec![];
+            for _ in 0..3 { toks.extend(search_tokens(&a.name)); }
+            toks.extend(search_tokens(&a.original_name));
+            toks.extend(search_tokens(&a.metadata.to_string()));
+            if let Ok(Some(t)) = self.conn.query_row("SELECT content FROM blob_text WHERE sha256=?", [&a.sha256], |r| r.get::<_, String>(0)).optional() {
+                toks.extend(search_tokens(&t.chars().take(200_000).collect::<String>()));
+            }
+            (a, toks)
+        }).collect();
+        let n = docs.len().max(1) as f64;
+        let avg = docs.iter().map(|d| d.1.len()).sum::<usize>() as f64 / n;
+        let substr = query.trim().to_lowercase();
+        let mut out: Vec<Ranked> = docs.into_iter().filter_map(|(a, toks)| {
+            let len = toks.len() as f64;
+            let mut score = 0.0; let mut matched = vec![];
+            for qt in &q {
+                let (mut tf, mut exact) = (0.0, false);
+                for t in &toks { if t == qt { tf += 1.0; exact = true } else if qt.len() >= 3 && t.starts_with(qt.as_str()) { tf += 0.6 } }
+                if tf == 0.0 { continue; }
+                // idf aproximado: cuantos más documentos lo contienen, menos peso (se recalcula abajo)
+                let k1 = 1.2; let b = 0.75;
+                score += tf * (k1 + 1.0) / (tf + k1 * (1.0 - b + b * len / avg.max(1.0)));
+                matched.push(if exact { qt.clone() } else { format!("{qt}*") });
+            }
+            if a.name.to_lowercase().contains(&substr) { score += 3.0 }
+            if matched.len() == q.len() && q.len() > 1 { score *= 1.5 } // todas las palabras presentes
+            (score > 0.0).then(|| Ranked { asset: a, score, matched })
+        }).collect();
+        // idf: penaliza términos muy comunes
+        for qt in &q {
+            let df = out.iter().filter(|r| r.matched.iter().any(|m| m.trim_end_matches('*') == qt)).count() as f64;
+            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+            for r in out.iter_mut().filter(|r| r.matched.iter().any(|m| m.trim_end_matches('*') == qt)) { r.score *= 0.5 + idf / 2.0; }
+        }
+        out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        out.truncate(limit);
+        for r in out.iter_mut() { r.score = (r.score * 100.0).round() / 100.0; }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,5 +1019,23 @@ mod tests {
         assert_eq!(v.validate_asset(&dep.id, Some(true), "", "claude").unwrap().status_after, "PARTIALLY VERIFIED");
         let rbx = v.import_file(&file(src.path(), "S.rbxmx", br#"<roblox version="4"><Item class="Script" referent="A"><Properties><string name="Name">S</string><ProtectedString name="Source">local = </ProtectedString></Properties></Item></roblox>"#), None, None).unwrap().asset;
         assert_eq!(v.validate_asset(&rbx.id, None, "", "claude").unwrap().status_after, "FAILED");
+    }
+
+    #[test]
+    fn ranked_search() {
+        assert_eq!(search_tokens("InventoryUIController v2"), vec!["inventory", "ui", "controller", "inventoryuicontroller", "v", "2", "v2"]);
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        v.import_file(&file(src.path(), "InventoryController.luau", b"local Inventory = {}\nfunction Inventory.AddItem(player, item) end\nreturn Inventory"), None, None).unwrap();
+        v.import_file(&file(src.path(), "ShopUI.luau", b"-- tienda\nlocal Inventory = require(script.Parent.InventoryController)\nInventory.AddItem(p, 'Sword')"), None, None).unwrap();
+        v.import_file(&file(src.path(), "DoorScript.luau", b"script.Parent.Touched:Connect(function() end)"), None, None).unwrap();
+        let r = v.search_ranked(None, None, "inventory add item", 10).unwrap();
+        assert_eq!(r[0].asset.name, "InventoryController", "el que se llama así va primero");
+        assert_eq!(r.len(), 2, "la puerta no aparece");
+        let r = v.search_ranked(None, None, "invent", 10).unwrap();
+        assert!(!r.is_empty(), "prefijos");
+        assert!(v.search_ranked(None, None, "dragon", 10).unwrap().is_empty());
+        assert_eq!(v.search_ranked(None, None, "", 10).unwrap().len(), 3);
     }
 }

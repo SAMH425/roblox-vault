@@ -70,6 +70,11 @@
   Settings → "Instalar plugin en Studio" lo escribe en %LOCALAPPDATA%\Roblox\Plugins con el token.
 - Pruebas: 3 Rust (rutas + servidor HTTP real + el plugin se valida como Luau con full-moon).
 
+## Fase 7 — PULIDO (en curso)
+- Búsqueda por relevancia local (BM25, camelCase, prefijos, código) en la app, MCP y plugin. Sin IA externa.
+- Documentación: README, docs/ARCHITECTURE, docs/MCP, docs/PLUGIN, docs/LIMITATIONS.
+- Instalador Windows (NSIS) + actualizaciones automáticas firmadas ya funcionando.
+
 ## Pendiente
 Fase 7: pulido + instalador.
 
