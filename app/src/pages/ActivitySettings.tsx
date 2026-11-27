@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { DatabaseBackup, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Copy, DatabaseBackup, PlugZap, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { useUpdater } from '../components/Updater'
 import { api, type Activity as Act, type IntegrityReport } from '../lib/api'
 import { toastError, useToast } from '../state/toast'
@@ -35,7 +35,8 @@ export function Settings({ updater }: { updater: ReturnType<typeof useUpdater> }
   const [busy, setBusy] = useState(false)
   const push = useToast((s) => s.push)
   const [auto, setAuto] = useState(true)
-  useEffect(() => { api.vaultPath().then(setPath).catch(toastError); api.getSetting('auto_capture_tested').then((v) => setAuto(v !== 'false')).catch(() => {}) }, [])
+  const [mcp, setMcp] = useState<Awaited<ReturnType<typeof api.mcpInfo>> | null>(null)
+  useEffect(() => { api.vaultPath().then(setPath).catch(toastError); api.mcpInfo().then(setMcp).catch(() => {}); api.getSetting('auto_capture_tested').then((v) => setAuto(v !== 'false')).catch(() => {}) }, [])
   async function toggleAuto() { try { await api.setSetting('auto_capture_tested', String(!auto)); setAuto(!auto) } catch (e) { toastError(e) } }
 
   async function verify() {
@@ -55,6 +56,18 @@ export function Settings({ updater }: { updater: ReturnType<typeof useUpdater> }
           <p className="mt-1 text-sm text-zinc-400">Versión {updater.version || '—'} · {{ idle: 'Sin comprobar', checking: 'Buscando…', none: 'Estás al día', available: `Disponible ${updater.st.msg}`, downloading: 'Descargando…', error: updater.st.msg }[updater.st.kind]}</p></div>
         {updater.st.kind === 'available' ? <button className="btn-primary" onClick={updater.install}><RefreshCw size={16} />Actualizar</button>
           : <button className="btn-ghost" disabled={updater.st.kind === 'checking' || updater.st.kind === 'downloading'} onClick={updater.check}><RefreshCw size={16} />Buscar</button>}
+      </div>
+      <div className="card mb-4 p-5">
+        <h3 className="flex items-center gap-2 font-medium text-white"><PlugZap size={16} className="text-accent" />Conectar Claude Code (MCP)</h3>
+        {!mcp ? <div className="skeleton mt-3 h-10" /> : !mcp.exists
+          ? <p className="mt-2 text-sm text-amber-300">El servidor MCP no está junto a la app (modo desarrollo). Se instala con la versión descargada de GitHub.</p>
+          : <>
+            <p className="mt-1 text-sm text-zinc-400">Pega esto una vez en una terminal (PowerShell). Claude Code podrá buscar, recuperar y registrar recursos en esta bóveda.</p>
+            <div className="mt-3 flex items-start gap-2"><pre className="flex-1 overflow-x-auto rounded-xl bg-bg/80 p-3 font-mono text-xs text-accent">{mcp.claude_code}</pre>
+              <button className="btn-ghost" onClick={() => navigator.clipboard.writeText(mcp.claude_code).then(() => push('ok', 'Comando copiado'))}><Copy size={14} /></button></div>
+            <details className="mt-2 text-xs text-zinc-500"><summary className="cursor-pointer">Claude Desktop (claude_desktop_config.json)</summary>
+              <pre className="mt-2 overflow-x-auto rounded-xl bg-bg/80 p-3 font-mono">{JSON.stringify(mcp.claude_desktop, null, 2)}</pre></details>
+          </>}
       </div>
       <div className="card mb-4 flex items-center justify-between p-5">
         <div><h3 className="font-medium text-white">Registro automático de recursos probados</h3>

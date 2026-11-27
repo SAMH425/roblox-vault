@@ -42,8 +42,22 @@
 - Animations: KeyframeSequence en .rbxm/.rbxmx → keyframes, duración, bucle, articulaciones.
 - Pruebas: 9 Rust + 5 Vitest.
 
+## Fase 5 — MCP ✅
+- `crates/vault-mcp`: servidor MCP propio (stdio, JSON-RPC 2.0, protocolo 2025-06-18) sobre vault-core.
+  Se compila en CI y se instala junto a la app (`vault-mcp.exe`). Settings → "Conectar Claude Code" da el comando.
+- 12 herramientas: vault_search, vault_get_asset, vault_save_asset, vault_get_script, vault_get_system,
+  vault_restore_asset, vault_update_asset, vault_get_dependencies, vault_validate_asset, vault_list_projects,
+  vault_get_project_context, vault_log_activity. Validación de entrada, JSON estructurado, errores controlados
+  (isError), todo queda en Activity con actor "claude". Acepta id o nombre.
+- Protocolo para Claude en `instructions` (consultar antes de crear, reutilizar, versionar, registrar pruebas reales).
+- Validación real: SHA-256 + sintaxis Luau (full-moon, dialecto Luau) + RBXM/GLB/JSON + scripts internos + dependencias.
+  Sin pruebas → máximo PARTIALLY VERIFIED; VERIFIED solo con pruebas superadas; cualquier fallo → FAILED.
+  Claude no puede poner VERIFIED a mano.
+- Búsqueda: exacta por nombre y por contenido. La búsqueda semántica local opcional queda pendiente (Fase 7).
+- Pruebas: 10 Rust (núcleo) + 1 prueba de punta a punta que lanza el binario y habla MCP + 5 Vitest.
+
 ## Pendiente
-- Fase 5: MCP. Fase 6: plugin Studio. Fase 7: pulido + instalador.
+- Fase 6: plugin Studio. Fase 7: pulido + instalador.
 
 ## Limitaciones conocidas
 - La app se compiló y probó en Linux; falta la primera ejecución en Windows.

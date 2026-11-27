@@ -57,6 +57,24 @@ fn e<E: std::fmt::Display>(x: E) -> String { x.to_string() }
 #[tauri::command] fn add_project_note(s: tauri::State<AppState>, project_id: String, kind: String, text: String) -> R<ProjectNote> { s.0.lock().map_err(e)?.add_project_note(&project_id, &kind, &text).map_err(e) }
 #[tauri::command] fn delete_project_note(s: tauri::State<AppState>, id: i64) -> R<()> { s.0.lock().map_err(e)?.delete_project_note(id).map_err(e) }
 
+#[derive(serde::Serialize)]
+struct McpInfo { path: String, exists: bool, vault_root: String, claude_code: String, claude_desktop: serde_json::Value }
+
+/// Ruta del servidor MCP instalado junto a la app y comandos listos para copiar.
+#[tauri::command] fn mcp_info(s: tauri::State<AppState>) -> R<McpInfo> {
+    let root = s.0.lock().map_err(e)?.root.display().to_string();
+    let exe = std::env::current_exe().map_err(e)?;
+    let name = if cfg!(windows) { "vault-mcp.exe" } else { "vault-mcp" };
+    let path = exe.parent().map(|d| d.join(name)).unwrap_or_default();
+    let p = path.display().to_string();
+    Ok(McpInfo {
+        exists: path.exists(),
+        claude_code: format!("claude mcp add roblox-vault -s user -e ROBLOX_VAULT_HOME=\"{root}\" -- \"{p}\""),
+        claude_desktop: serde_json::json!({ "mcpServers": { "roblox-vault": { "command": p, "env": { "ROBLOX_VAULT_HOME": root } } } }),
+        path: p, vault_root: root,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,7 +88,7 @@ pub fn run() {
             app.manage(AppState(Mutex::new(Vault::open(root)?)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note])
+        .invoke_handler(tauri::generate_handler![get_stats, list_projects, create_project, list_assets, import_files, set_status, restore_asset, verify_integrity, create_backup, recent_activity, vault_path, list_versions, get_text, add_version, update_asset, list_systems, create_system, update_system, set_system_status, add_system_member, remove_system_member, restore_system, read_blob, roblox_scene, save_thumbnail, thumbnail, add_dependency, remove_dependency, dependency_report, asset_history, list_captures, decide_capture, get_setting, set_setting, project_context, update_project, add_project_note, delete_project_note, mcp_info])
         .run(tauri::generate_context!())
         .expect("error al iniciar ROBLOX VAULT");
 }

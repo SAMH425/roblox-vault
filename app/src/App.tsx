@@ -58,7 +58,7 @@ export default function App() {
           ))}
         </nav>
         <div className="mt-auto"><UpdateBanner u={u} /></div>
-        <div className="px-2 text-[11px] text-zinc-500">v{u.version || '0.1.0'} · Fase 4{!isTauri() && <div className="mt-1 text-amber-300">Modo navegador: sin bóveda</div>}</div>
+        <div className="px-2 text-[11px] text-zinc-500">v{u.version || '0.1.0'} · Fase 5{!isTauri() && <div className="mt-1 text-amber-300">Modo navegador: sin bóveda</div>}</div>
       </aside>
       <main className="flex-1 overflow-y-auto">
         <AnimatePresence mode="wait">

@@ -15,6 +15,7 @@ thiserror = "1"
 rbx_binary = "3"
 rbx_xml = "3"
 rbx_dom_weak = "4"
+full_moon = { version = "3", features = ["luau"] }
 
 [dev-dependencies]
 tempfile = "3"

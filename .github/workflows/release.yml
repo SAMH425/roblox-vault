@@ -17,10 +17,19 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-        with: { workspaces: "app/src-tauri -> target\ncrates/vault-core -> target" }
+        with: { workspaces: "app/src-tauri -> target\ncrates/vault-core -> target\ncrates/vault-mcp -> target" }
 
-      - name: Pruebas del núcleo
-        run: cargo test --manifest-path crates/vault-core/Cargo.toml
+      - name: Pruebas del núcleo y del servidor MCP
+        run: |
+          cargo test --manifest-path crates/vault-core/Cargo.toml
+          cargo test --manifest-path crates/vault-mcp/Cargo.toml
+
+      - name: Compilar servidor MCP (se instala junto a la app)
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path crates/vault-mcp/Cargo.toml
+          New-Item -ItemType Directory -Force app/src-tauri/binaries | Out-Null
+          Copy-Item crates/vault-mcp/target/release/vault-mcp.exe app/src-tauri/binaries/vault-mcp-x86_64-pc-windows-msvc.exe
 
       - name: Versión automática (0.MINOR.run)
         shell: pwsh
@@ -29,11 +38,16 @@ jobs:
           $parts = $c.version.Split('.')
           $v = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
           $c.version = $v
+          $c.bundle | Add-Member -NotePropertyName externalBin -NotePropertyValue @("binaries/vault-mcp") -Force
           $c.plugins.updater.endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
           $c | ConvertTo-Json -Depth 20 | Set-Content app/src-tauri/tauri.conf.json
           "APP_VERSION=$v" >> $env:GITHUB_ENV
 
       - run: npm ci
+        working-directory: app
+
+      - name: Pruebas del frontend
+        run: npx vitest run
         working-directory: app
 
       - uses: tauri-apps/tauri-action@v0

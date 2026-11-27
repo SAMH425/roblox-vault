@@ -61,6 +61,7 @@ export const api = {
   updateProject: (id: string, name: string, description: string, architecture: string) => call<Project>('update_project', { id, name, description, architecture }),
   addNote: (projectId: string, kind: NoteKind, text: string) => call<ProjectNote>('add_project_note', { projectId, kind, text }),
   deleteNote: (id: number) => call<void>('delete_project_note', { id }),
+  mcpInfo: () => call<{ path: string; exists: boolean; vault_root: string; claude_code: string; claude_desktop: unknown }>('mcp_info'),
   versions: (id: string) => call<Version[]>('list_versions', { id }),
   text: (id: string, version?: number) => call<string | null>('get_text', { id, version: version ?? null }),
   addVersion: (id: string, path: string) => call<ImportResult>('add_version', { id, path }),

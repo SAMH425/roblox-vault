@@ -92,7 +92,7 @@ impl Vault {
         let root = root.into();
         for d in ["blobs", "backups", "restored", "thumbs"] { fs::create_dir_all(root.join(d))?; }
         let conn = Connection::open(root.join("vault.db"))?;
-        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
         let v = Vault { root, conn };
         v.migrate()?;
         Ok(v)
@@ -672,6 +672,76 @@ impl Vault {
     }
 }
 
+
+#[derive(Serialize, Debug, Clone)]
+pub struct Check { pub name: String, pub ok: bool, pub detail: String }
+
+#[derive(Serialize, Debug)]
+pub struct ValidationReport { pub asset_id: String, pub name: String, pub checks: Vec<Check>, pub status_before: String, pub status_after: String, pub note: String }
+
+/// Errores de sintaxis Luau (vacío = sin errores). Usa full_moon con el dialecto Luau.
+pub fn luau_syntax_errors(code: &str) -> Vec<String> {
+    full_moon::parse_fallible(code, full_moon::LuaVersion::luau()).errors().iter().take(20).map(|e| e.to_string()).collect()
+}
+
+impl Vault {
+    /// Valida un recurso: integridad (SHA-256), estructura (Luau / RBXM / GLB / JSON), dependencias
+    /// y, si se aportan, resultados reales de pruebas. Integridad ≠ funcionamiento:
+    /// sin pruebas el máximo es PARTIALLY VERIFIED; con pruebas superadas → VERIFIED; cualquier fallo → FAILED.
+    pub fn validate_asset(&self, asset_id: &str, test_passed: Option<bool>, test_output: &str, actor: &str) -> Result<ValidationReport> {
+        let a = self.get_asset(asset_id)?;
+        let mut checks = vec![];
+        let (path, _) = self.blob_path(asset_id, None)?;
+        let integrity = path.exists() && sha256_file(&path)?.0 == a.sha256;
+        checks.push(Check { name: "integridad".into(), ok: integrity, detail: if integrity { "SHA-256 coincide".into() } else { "archivo ausente o modificado".into() } });
+        if integrity {
+            let bytes = fs::read(&path)?;
+            let structure = match a.format.as_str() {
+                "lua" | "luau" => match String::from_utf8(bytes.clone()) {
+                    Ok(code) => { let e = luau_syntax_errors(&code); Some((e.is_empty(), if e.is_empty() { "sintaxis Luau válida".into() } else { e.join("; ") })) }
+                    Err(_) => Some((false, "no es texto UTF-8".into())),
+                },
+                "rbxm" | "rbxmx" => Some(match roblox::parse(&bytes, &a.format) { Ok(m) => (true, format!("{} instancias, {} piezas, {} scripts", m.instance_count, m.parts.len(), m.scripts.len())), Err(e) => (false, e) }),
+                "glb" => Some((bytes.len() >= 12 && &bytes[..4] == b"glTF", "cabecera glTF binaria".into())),
+                "gltf" | "json" => Some(match serde_json::from_slice::<serde_json::Value>(&bytes) { Ok(_) => (true, "JSON válido".into()), Err(e) => (false, e.to_string()) }),
+                _ => None,
+            };
+            if let Some((ok, detail)) = structure { checks.push(Check { name: "estructura".into(), ok, detail }); }
+            // scripts dentro de modelos: sintaxis de cada uno
+            if a.format == "rbxm" || a.format == "rbxmx" {
+                if let Ok(m) = roblox::parse(&bytes, &a.format) {
+                    let bad: Vec<String> = m.scripts.iter().filter_map(|s| { let e = luau_syntax_errors(&s.source); (!e.is_empty()).then(|| format!("{}: {}", s.path, e[0])) }).collect();
+                    if !m.scripts.is_empty() { checks.push(Check { name: "scripts internos".into(), ok: bad.is_empty(), detail: if bad.is_empty() { format!("{} scripts con sintaxis válida", m.scripts.len()) } else { bad.join("; ") } }); }
+                }
+            }
+        }
+        let deps = self.dependency_report(asset_id)?;
+        checks.push(Check { name: "dependencias".into(), ok: deps.problems.is_empty(), detail: if deps.problems.is_empty() { format!("{} dependencias correctas", deps.all.len()) } else { deps.problems.join("; ") } });
+        if !deps.unresolved_requires.is_empty() {
+            checks.push(Check { name: "require sin resolver".into(), ok: false, detail: format!("no están en la bóveda: {}", deps.unresolved_requires.join(", ")) });
+        }
+        if let Some(p) = test_passed { checks.push(Check { name: "pruebas".into(), ok: p, detail: test_output.chars().take(2000).collect() }); }
+
+        // los require sin resolver no hacen fallar el recurso (pueden ser servicios de Roblox), solo impiden VERIFIED
+        let hard_fail = checks.iter().any(|c| !c.ok && c.name != "require sin resolver");
+        let soft_fail = checks.iter().any(|c| !c.ok);
+        let (after, note) = if a.status == "DEPRECATED" { ("DEPRECATED", "el recurso está obsoleto; el estado no se cambia".to_string()) }
+            else if hard_fail { ("FAILED", "al menos una comprobación falló".into()) }
+            else if test_passed == Some(true) && !soft_fail { ("VERIFIED", "comprobaciones y pruebas reales superadas".into()) }
+            else if a.status == "VERIFIED" && test_passed.is_none() { ("VERIFIED", "ya estaba verificado con pruebas; las comprobaciones siguen bien".into()) }
+            else { ("PARTIALLY VERIFIED", if test_passed.is_none() { "estructura correcta, pero sin pruebas reales no se puede marcar como funcional".into() } else { "pruebas superadas, pero hay require sin resolver".into() }) };
+        if after != a.status { self.conn.execute("UPDATE assets SET status=?, updated_at=? WHERE id=?", params![after, now(), asset_id])?; }
+        let mut m = a.metadata.clone();
+        if let Some(o) = m.as_object_mut() {
+            o.insert("last_validation".into(), serde_json::json!({ "at": now(), "by": actor, "result": after, "checks": &checks }));
+            if let Some(p) = test_passed { o.insert("last_test".into(), serde_json::json!({ "passed": p, "output": test_output.chars().take(4000).collect::<String>(), "at": now() })); }
+        }
+        self.conn.execute("UPDATE assets SET metadata=? WHERE id=?", params![m.to_string(), asset_id])?;
+        self.log_asset(actor, "asset.validate", Some(asset_id), &a.name, after, false)?;
+        Ok(ValidationReport { asset_id: asset_id.into(), name: a.name, checks, status_before: a.status, status_after: after.into(), note })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,5 +924,28 @@ mod tests {
         let a = v.import_file(&file(src.path(), "Run.rbxmx", xml.as_bytes()), None, None).unwrap().asset;
         assert_eq!(a.kind, "animation");
         assert_eq!(a.metadata["animations"][0]["keyframes"], 1);
+    }
+
+    #[test]
+    fn validation_rules() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let v = Vault::open(root.path()).unwrap();
+        assert!(luau_syntax_errors("local x: number = if a then 1 else 2\nx += 1").is_empty(), "sintaxis Luau moderna");
+        assert!(!luau_syntax_errors("local x = ").is_empty());
+        let good = v.import_file(&file(src.path(), "Good.luau", b"local M = {}\nfunction M.f(a: number): number return a * 2 end\nreturn M"), None, None).unwrap().asset;
+        let r = v.validate_asset(&good.id, None, "", "claude").unwrap();
+        assert_eq!(r.status_after, "PARTIALLY VERIFIED", "sin pruebas no puede ser VERIFIED");
+        let r = v.validate_asset(&good.id, Some(true), "4 passed", "claude").unwrap();
+        assert_eq!(r.status_after, "VERIFIED");
+        assert_eq!(v.get_asset(&good.id).unwrap().metadata["last_validation"]["result"], "VERIFIED");
+        let bad = v.import_file(&file(src.path(), "Bad.luau", b"local function (\n"), None, None).unwrap().asset;
+        assert_eq!(v.validate_asset(&bad.id, Some(true), "", "claude").unwrap().status_after, "FAILED", "sintaxis rota nunca es funcional");
+        let r = v.validate_asset(&good.id, Some(false), "1 failed", "claude").unwrap();
+        assert_eq!(r.status_after, "FAILED");
+        let dep = v.import_file(&file(src.path(), "Uses.luau", b"local X = require(script.Parent.Nope)\nreturn X"), None, None).unwrap().asset;
+        assert_eq!(v.validate_asset(&dep.id, Some(true), "", "claude").unwrap().status_after, "PARTIALLY VERIFIED");
+        let rbx = v.import_file(&file(src.path(), "S.rbxmx", br#"<roblox version="4"><Item class="Script" referent="A"><Properties><string name="Name">S</string><ProtectedString name="Source">local = </ProtectedString></Properties></Item></roblox>"#), None, None).unwrap().asset;
+        assert_eq!(v.validate_asset(&rbx.id, None, "", "claude").unwrap().status_after, "FAILED");
     }
 }
