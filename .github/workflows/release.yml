@@ -8,12 +8,17 @@ on:
 permissions:
   contents: write
 
+# una compilación a la vez: evita que dos versiones choquen al publicar la Release
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
